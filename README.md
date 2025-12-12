@@ -151,7 +151,7 @@ Modify existing event. Only provided fields are updated.
 |-----------|---------|-----------------|
 | event_id | required | Event to update. For recurring: instance ID (e.g., `abc123_20250115T100000Z`) or master ID |
 | calendar_id | `"primary"` | For non-primary calendar |
-| scope | `"single"` | For recurring events: `single` (this instance), `all` (entire series), `following` (this and future) |
+| scope | `"single"` | For recurring events: `single` (this instance), `all` (entire series) |
 | summary | `None` | New title |
 | start | `None` | New start time |
 | end | `None` | New end time |
@@ -170,7 +170,7 @@ Modify existing event. Only provided fields are updated.
 | send_updates | `"all"` | Notification setting |
 | account | default | Only for non-default account |
 
-**Recurring events:** Use `scope` to control which instances are affected. With master ID and `scope="single"`, updates first upcoming instance.
+**Recurring events:** Use `scope` to control which instances are affected. `scope="single"` with master ID updates first upcoming instance. `scope="all"` updates entire series.
 
 **Attendee options:** Use `attendees` to replace entire list, or `add_attendees`/`remove_attendees` for incremental changes.
 

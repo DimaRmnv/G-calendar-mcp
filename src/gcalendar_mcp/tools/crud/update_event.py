@@ -18,7 +18,7 @@ from gcalendar_mcp.api.events import (
 def update_event(
     event_id: str,
     calendar_id: str = "primary",
-    scope: Literal["single", "all", "following"] = "single",
+    scope: Literal["single", "all"] = "single",
     summary: Optional[str] = None,
     start: Optional[str] = None,
     end: Optional[str] = None,
@@ -48,7 +48,6 @@ def update_event(
         scope: How to apply changes for recurring events:
             - 'single': Update only this instance (default). If event_id is master, updates first upcoming instance.
             - 'all': Update all instances (past and future). Requires master event ID.
-            - 'following': Update this and all future instances. Creates exception from this point forward.
             For non-recurring events, this parameter is ignored.
         summary: New title for the event
         start: New start time: '2025-01-01T10:00:00' for timed or '2025-01-01' for all-day
@@ -97,30 +96,6 @@ def update_event(
                 target_event_id = current_event["recurringEventId"]
             # else: already master
             scope_applied = "all"
-            
-        elif scope == "following":
-            # For "following", we need to update starting from this instance
-            # Google Calendar API doesn't have direct "following" support via PATCH
-            # We need to: 1) Get this instance ID, 2) Update it (creates exception)
-            # Then modify recurrence end date on master
-            if is_recurring_instance(event_id):
-                target_event_id = event_id
-            else:
-                # Master ID provided - get first upcoming instance
-                from datetime import datetime
-                instances = get_recurring_instances(
-                    event_id,
-                    account=account,
-                    calendar_id=calendar_id,
-                    time_min=datetime.now().isoformat(),
-                    max_results=1
-                )
-                if instances:
-                    target_event_id = instances[0]["id"]
-            scope_applied = "following"
-            # Note: Full "following" implementation would require modifying master's RRULE
-            # to end before this instance. Current implementation updates single instance.
-            # TODO: Implement full "following" with RRULE modification
             
         else:  # scope == "single"
             if is_recurring_instance(event_id):

@@ -8,6 +8,7 @@ Handles:
 """
 
 import json
+import os
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -79,12 +80,13 @@ def load_config() -> dict:
 
 
 def save_config(config: dict) -> None:
-    """Save config to file."""
+    """Save config to file with secure permissions."""
     config_path = get_config_path()
     config_path.write_text(
         json.dumps(config, indent=2, ensure_ascii=False),
         encoding="utf-8"
     )
+    os.chmod(config_path, 0o600)
 
 
 def add_account(name: str, email: str, timezone: Optional[str] = None) -> None:
@@ -184,12 +186,13 @@ def has_oauth_client() -> bool:
 
 
 def save_oauth_client(credentials: dict) -> None:
-    """Save OAuth client credentials."""
+    """Save OAuth client credentials with secure permissions."""
     oauth_path = get_oauth_client_path()
     oauth_path.write_text(
         json.dumps(credentials, indent=2),
         encoding="utf-8"
     )
+    os.chmod(oauth_path, 0o600)
 
 
 def load_oauth_client() -> Optional[dict]:

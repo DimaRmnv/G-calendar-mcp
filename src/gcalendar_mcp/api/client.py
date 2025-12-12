@@ -8,6 +8,8 @@ Handles:
 """
 
 import json
+import os
+import logging
 from typing import Optional
 from pathlib import Path
 
@@ -31,6 +33,9 @@ SCOPES = [
     "https://www.googleapis.com/auth/calendar.events",    # Manage events
     "https://www.googleapis.com/auth/calendar.settings.readonly",  # Read settings (timezone)
 ]
+
+
+logger = logging.getLogger(__name__)
 
 
 # Cache for service instances
@@ -58,9 +63,11 @@ def get_credentials(account: str) -> Optional[Credentials]:
     if creds and creds.expired and creds.refresh_token:
         try:
             creds.refresh(Request())
-            # Save refreshed token
+            # Save refreshed token with secure permissions
             token_path.write_text(creds.to_json(), encoding="utf-8")
-        except Exception:
+            os.chmod(token_path, 0o600)
+        except Exception as e:
+            logger.warning(f"Token refresh failed for account '{account}': {e}")
             return None
     
     if creds and creds.valid:
@@ -70,9 +77,10 @@ def get_credentials(account: str) -> Optional[Credentials]:
 
 
 def save_credentials(account: str, creds: Credentials) -> None:
-    """Save credentials to token file."""
+    """Save credentials to token file with secure permissions."""
     token_path = get_token_path(account)
     token_path.write_text(creds.to_json(), encoding="utf-8")
+    os.chmod(token_path, 0o600)
 
 
 def run_oauth_flow(account: str, email_hint: Optional[str] = None) -> Credentials:
