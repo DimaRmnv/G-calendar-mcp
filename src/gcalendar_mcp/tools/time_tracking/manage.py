@@ -80,15 +80,12 @@ OPERATIONS = {
     "config_list": lambda p: {"settings": config_list()},
 
     # Init
-    "init": lambda p: _init_database(
-        populate_defaults=p.get("populate_defaults", True),
-        force_reset=p.get("force_reset", False)
-    ),
+    "init": lambda p: _init_database(force_reset=p.get("force_reset", False)),
 }
 
 
-def _init_database(populate_defaults: bool = True, force_reset: bool = False) -> dict:
-    """Initialize database with optional default data."""
+def _init_database(force_reset: bool = False) -> dict:
+    """Initialize empty database."""
     import os
 
     db_path = get_database_path()
@@ -105,22 +102,10 @@ def _init_database(populate_defaults: bool = True, force_reset: bool = False) ->
 
     init_database()
 
-    if not populate_defaults:
-        return {
-            "status": "created",
-            "message": "Empty database created.",
-            "path": str(db_path)
-        }
-
-    # Populate with defaults
-    from gcalendar_mcp.tools.time_tracking.init import populate_default_data
-    counts = populate_default_data()
-
     return {
         "status": "created",
-        "message": "Database created with default data.",
-        "path": str(db_path),
-        "counts": counts
+        "message": "Empty database created.",
+        "path": str(db_path)
     }
 
 
@@ -175,7 +160,7 @@ async def time_tracking(operations: list[dict]) -> dict:
             - config_list
 
         Init:
-            - init: populate_defaults?, force_reset?
+            - init: force_reset?
 
     Returns:
         Dict with results array and summary.
