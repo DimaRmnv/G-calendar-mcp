@@ -558,8 +558,28 @@ def config_list() -> dict[str, str]:
 # =============================================================================
 
 def get_project_by_code(code: str) -> Optional[dict]:
-    """Get project by code (for parser)."""
+    """Get project by code (for parser). Returns first match."""
     return project_get(code=code)
+
+
+def get_projects_by_code(code: str) -> list[dict]:
+    """Get ALL projects with the same code, ordered by structure_level DESC.
+    
+    This allows multiple projects with same code but different structure levels.
+    Example: CAYIB Level 3 (with phases+tasks) and CAYIB Level 2 (phases only).
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM projects WHERE code = ? ORDER BY structure_level DESC",
+            (code.upper(),)
+        )
+        results = []
+        for row in cursor.fetchall():
+            item = dict(row)
+            item["is_billable"] = bool(item["is_billable"])
+            results.append(item)
+        return results
 
 
 def get_phase_by_code(project_code: str, phase_code: str) -> Optional[dict]:

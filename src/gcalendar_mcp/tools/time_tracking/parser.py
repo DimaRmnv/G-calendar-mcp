@@ -8,6 +8,9 @@ Supports three structure levels (level = number of components after PROJECT):
 - Level 1: PROJECT * Description (UFSP, CSUM, EFCF, SEDRA3, AIYL-MN)
 - Level 2: PROJECT * PHASE * Description (BCH, BDU, BDU-TEN)
 - Level 3: PROJECT * PHASE * TASK * Description (ADB25, CAYIB, EDD)
+
+Multiple projects can have the same code with different structure levels.
+Parser tries each project variant until one matches the event format.
 """
 
 import re
@@ -16,9 +19,9 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from gcalendar_mcp.tools.time_tracking.database import (
-    get_project,
-    get_phase,
-    get_task,
+    get_projects_by_code,
+    phase_get,
+    task_get,
     is_excluded,
 )
 
@@ -27,6 +30,7 @@ from gcalendar_mcp.tools.time_tracking.database import (
 class ParsedEvent:
     """Parsed calendar event data."""
     project_code: Optional[str] = None
+    project_id: Optional[int] = None
     phase_code: Optional[str] = None
     task_code: Optional[str] = None
     description: Optional[str] = None
@@ -60,6 +64,9 @@ def parse_summary(summary: str) -> ParsedEvent:
     - PROJECT : PHASE : TASK : Description
     - PROJECT * PHASE * Description
     - PROJECT * Description
+    
+    When multiple projects exist with the same code (different structure levels),
+    tries each one starting from highest structure_level until a match is found.
     
     Returns ParsedEvent with extracted data and any errors.
     """
@@ -102,33 +109,48 @@ def parse_summary(summary: str) -> ParsedEvent:
     if summary.rstrip().endswith('##'):
         result.description = summary  # Keep full for reference
     
-    # Look up project in database
-    project = get_project(potential_project)
+    # Look up ALL projects with this code (may be multiple with different levels)
+    projects = get_projects_by_code(potential_project)
     
-    if not project:
+    if not projects:
         # Project not found - entire summary is description with error
         result.description = summary
         result.errors.append(f"Project code '{potential_project}' not found")
         return result
     
-    # Project found
+    # Try each project variant (sorted by structure_level DESC)
+    # Return first successful parse
+    for project in projects:
+        attempt = _try_parse_with_project(parts, project)
+        if attempt.is_valid:
+            return attempt
+    
+    # No variant matched successfully - return last attempt with errors
+    # But try to provide best possible result
+    return _try_parse_with_project(parts, projects[0])
+
+
+def _try_parse_with_project(parts: list[str], project: dict) -> ParsedEvent:
+    """
+    Try to parse event parts using a specific project configuration.
+    
+    Returns ParsedEvent - check is_valid to see if parsing succeeded.
+    """
+    result = ParsedEvent(raw_summary=' * '.join(parts))
     result.project_code = project["code"]
+    result.project_id = project["id"]
     result.is_billable = project["is_billable"]
     result.position = project["position"]
+    
     structure_level = project["structure_level"]
     
-    # Parse based on structure level (level = number of components after PROJECT)
+    # Parse based on structure level
     if structure_level == 3:
-        # Level 3: PROJECT * PHASE * TASK * Description
-        result = _parse_level_3(parts, result)
+        return _parse_level_3(parts, result, project["id"])
     elif structure_level == 2:
-        # Level 2: PROJECT * PHASE * Description
-        result = _parse_level_2(parts, result)
+        return _parse_level_2(parts, result, project["id"])
     else:
-        # Level 1: PROJECT * Description
-        result = _parse_level_1(parts, result)
-    
-    return result
+        return _parse_level_1(parts, result)
 
 
 def _parse_level_1(parts: list[str], result: ParsedEvent) -> ParsedEvent:
@@ -138,14 +160,13 @@ def _parse_level_1(parts: list[str], result: ParsedEvent) -> ParsedEvent:
     """
     if len(parts) > 1:
         result.description = ' * '.join(parts[1:])
-
     return result
 
 
-def _parse_level_2(parts: list[str], result: ParsedEvent) -> ParsedEvent:
+def _parse_level_2(parts: list[str], result: ParsedEvent, project_id: int) -> ParsedEvent:
     """
     Parse Level 2 structure: PROJECT * PHASE * Description
-    Used by: BCH, BFC, BDU, BDU-TEN
+    Used by: BCH, BFC, BDU, BDU-TEN, CAYIB (variant)
     """
     if len(parts) < 2:
         result.errors.append("Missing phase for Level 2 project")
@@ -153,7 +174,7 @@ def _parse_level_2(parts: list[str], result: ParsedEvent) -> ParsedEvent:
     
     # Part 1: Phase
     potential_phase = parts[1].upper()
-    phase = get_phase(result.project_code, potential_phase)
+    phase = phase_get(project_id=project_id, code=potential_phase)
 
     if phase:
         result.phase_code = phase["code"]
@@ -168,7 +189,7 @@ def _parse_level_2(parts: list[str], result: ParsedEvent) -> ParsedEvent:
     return result
 
 
-def _parse_level_3(parts: list[str], result: ParsedEvent) -> ParsedEvent:
+def _parse_level_3(parts: list[str], result: ParsedEvent, project_id: int) -> ParsedEvent:
     """
     Parse Level 3 structure: PROJECT * PHASE * TASK * Description
     Used by: ADB25, CAYIB, EDD
@@ -179,7 +200,7 @@ def _parse_level_3(parts: list[str], result: ParsedEvent) -> ParsedEvent:
 
     # Part 1: Phase
     potential_phase = parts[1].upper()
-    phase = get_phase(result.project_code, potential_phase)
+    phase = phase_get(project_id=project_id, code=potential_phase)
 
     if phase:
         result.phase_code = phase["code"]
@@ -195,7 +216,7 @@ def _parse_level_3(parts: list[str], result: ParsedEvent) -> ParsedEvent:
 
     # Part 2: Task or Description
     potential_task = parts[2].upper()
-    task = get_task(result.project_code, potential_task)
+    task = task_get(project_id=project_id, code=potential_task)
 
     if task:
         result.task_code = task["code"]
