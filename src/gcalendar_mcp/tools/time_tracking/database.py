@@ -48,11 +48,11 @@ def init_database() -> None:
     with get_connection() as conn:
         cursor = conn.cursor()
 
-        # Projects table - id is PK, code is unique
+        # Projects table - id is PK, code can repeat
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS projects (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                code TEXT NOT NULL UNIQUE,
+                code TEXT NOT NULL,
                 description TEXT NOT NULL,
                 is_billable INTEGER NOT NULL DEFAULT 0,
                 position TEXT,
