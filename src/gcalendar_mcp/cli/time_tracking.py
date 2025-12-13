@@ -39,8 +39,8 @@ def run_time_tracking_command(args: list[str]) -> int:
         print("  Restart Claude Desktop to load time tracking tools.")
         print("\n  Next steps:")
         print("  1. Restart Claude Desktop")
-        print("  2. Use time_tracking_init to create database with defaults")
-        print("  3. Configure with time_tracking_config")
+        print('  2. Initialize: time_tracking(operations=[{"op": "init"}])')
+        print('  3. Configure:  time_tracking(operations=[{"op": "config_set", "key": "work_calendar", "value": "..."}])')
         return 0
     
     elif command == "disable":
@@ -65,22 +65,22 @@ def run_time_tracking_command(args: list[str]) -> int:
     elif command == "init":
         # Initialize database directly from CLI
         from gcalendar_mcp.tools.time_tracking.database import database_exists, init_database
-        from gcalendar_mcp.tools.time_tracking.init import _populate_defaults
-        
+        from gcalendar_mcp.tools.time_tracking.init import populate_default_data
+
         db_path = get_app_dir() / "time_tracking.db"
-        
+
         if database_exists():
             print(f"✗ Database already exists: {db_path}")
-            print("  Use time_tracking_init from Claude with force_reset=True to recreate.")
+            print('  Use time_tracking(operations=[{"op": "init", "force_reset": true}]) to recreate.')
             return 1
-        
+
         print("Creating time tracking database...")
         init_database()
-        
+
         populate = "--no-defaults" not in args
         if populate:
             print("Populating default data...")
-            counts = _populate_defaults()
+            counts = populate_default_data()
             print(f"✓ Database created with:")
             print(f"  - {counts['projects']} projects")
             print(f"  - {counts['phases']} phases")
@@ -88,7 +88,7 @@ def run_time_tracking_command(args: list[str]) -> int:
             print(f"  - {counts['norms']} monthly norms")
         else:
             print("✓ Database created (empty)")
-        
+
         print(f"\n  Path: {db_path}")
         
         if not is_time_tracking_enabled():
