@@ -64,13 +64,13 @@ python -m gcalendar_mcp time-tracking init
 
 ### Event Format
 
-Events are parsed from summary using delimiter ` * ` or `:`:
+Events are parsed from summary using delimiter ` * ` or `:`. Structure level = number of components after PROJECT:
 
 | Structure Level | Format | Example |
 |-----------------|--------|---------|
-| Level 1 (full) | `PROJECT * PHASE * TASK * Description` | `ADB25 * UZ-Davr * BA * Review financial statements` |
+| Level 1 (simple) | `PROJECT * Description` | `CSUM * Prepare MFO assessment` |
 | Level 2 (phase) | `PROJECT * PHASE * Description` | `BCH * AI * Review implementation options` |
-| Level 3 (simple) | `PROJECT * Description` | `CSUM * Prepare MFO assessment` |
+| Level 3 (full) | `PROJECT * PHASE * TASK * Description` | `ADB25 * UZ-Davr * BA * Review financial statements` |
 
 ### Time Tracking Tools
 
@@ -118,10 +118,10 @@ Report metrics:
 ### Default Projects
 
 Initialization populates:
-- **Billable (Level 1):** ADB25, CAYIB, EDD
-- **Billable (Level 3):** UFSP, CSUM, SEDRA3, EFCF, AIYL-MN
-- **Non-billable (Level 2):** BCH, BFC, BDU, BDU-TEN
-- **Non-billable (Level 3):** MABI4, OPP, MAPS
+- **Billable (Level 3 - full):** ADB25, CAYIB, EDD
+- **Billable (Level 1 - simple):** UFSP, CSUM, SEDRA3, EFCF, AIYL-MN
+- **Non-billable (Level 2 - phase):** BCH, BFC, BDU, BDU-TEN
+- **Non-billable (Level 1 - simple):** MABI4, OPP, MAPS
 - **Workday norms:** 2025 Thailand calendar
 - **Exclusions:** Away, Lunch, Offline, Out of office
 
