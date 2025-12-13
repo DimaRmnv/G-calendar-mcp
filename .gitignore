@@ -46,3 +46,7 @@ gcp-oauth.keys.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Data directory (keep folder, ignore contents)
+data/*
+!data/.gitkeep
