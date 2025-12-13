@@ -2,14 +2,18 @@
 GCalendar MCP CLI entry point.
 
 Usage:
-    python -m gcalendar_mcp auth              # Add account
-    python -m gcalendar_mcp auth --remove X   # Remove account
-    python -m gcalendar_mcp auth --list       # List accounts
-    python -m gcalendar_mcp auth --default X  # Set default account
-    python -m gcalendar_mcp install           # Install to Claude Desktop (standalone)
-    python -m gcalendar_mcp install --dev     # Install in dev mode (use current location)
-    python -m gcalendar_mcp install --remove  # Remove from Claude Desktop
-    python -m gcalendar_mcp serve             # Run MCP server
+    python -m gcalendar_mcp auth                    # Add account
+    python -m gcalendar_mcp auth --remove X         # Remove account
+    python -m gcalendar_mcp auth --list             # List accounts
+    python -m gcalendar_mcp auth --default X        # Set default account
+    python -m gcalendar_mcp install                 # Install to Claude Desktop (standalone)
+    python -m gcalendar_mcp install --dev           # Install in dev mode
+    python -m gcalendar_mcp install --remove        # Remove from Claude Desktop
+    python -m gcalendar_mcp time-tracking enable    # Enable time tracking
+    python -m gcalendar_mcp time-tracking disable   # Disable time tracking
+    python -m gcalendar_mcp time-tracking status    # Show time tracking status
+    python -m gcalendar_mcp time-tracking init      # Initialize database
+    python -m gcalendar_mcp serve                   # Run MCP server
 """
 
 import argparse
@@ -73,6 +77,23 @@ def main():
         help="When uninstalling, also remove copied files from ~/.mcp/"
     )
     
+    # time-tracking command
+    time_tracking_parser = subparsers.add_parser(
+        "time-tracking",
+        help="Manage time tracking feature"
+    )
+    time_tracking_parser.add_argument(
+        "subcommand",
+        nargs="?",
+        choices=["enable", "disable", "status", "init"],
+        help="Time tracking subcommand"
+    )
+    time_tracking_parser.add_argument(
+        "--no-defaults",
+        action="store_true",
+        help="Init with empty database (no default projects)"
+    )
+    
     # serve command
     subparsers.add_parser("serve", help="Run MCP server")
     
@@ -95,6 +116,13 @@ def main():
             dev=args.dev,
             remove_files=args.remove_files
         ))
+    
+    elif args.command == "time-tracking":
+        from gcalendar_mcp.cli.time_tracking import run_time_tracking_command
+        subargs = [args.subcommand] if args.subcommand else []
+        if hasattr(args, 'no_defaults') and args.no_defaults:
+            subargs.append("--no-defaults")
+        sys.exit(run_time_tracking_command(subargs))
     
     elif args.command == "serve":
         from gcalendar_mcp.server import serve

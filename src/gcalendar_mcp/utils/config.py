@@ -5,6 +5,7 @@ Handles:
 - Config directory paths (~/.mcp/gcalendar/)
 - Config file read/write
 - Account management
+- Time tracking feature toggle
 """
 
 import json
@@ -61,22 +62,28 @@ def get_token_path(account: str) -> Path:
 
 
 def load_config() -> dict:
-    """Load config from file. Returns empty config if not exists."""
+    """Load config from file. Returns default config if not exists."""
     config_path = get_config_path()
     
-    if not config_path.exists():
-        return {
-            "default_account": None,
-            "accounts": {}
+    default_config = {
+        "default_account": None,
+        "accounts": {},
+        "time_tracking": {
+            "enabled": False
         }
+    }
+    
+    if not config_path.exists():
+        return default_config
     
     try:
-        return json.loads(config_path.read_text(encoding="utf-8"))
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        # Ensure time_tracking section exists
+        if "time_tracking" not in config:
+            config["time_tracking"] = {"enabled": False}
+        return config
     except (json.JSONDecodeError, IOError):
-        return {
-            "default_account": None,
-            "accounts": {}
-        }
+        return default_config
 
 
 def save_config(config: dict) -> None:
@@ -206,3 +213,31 @@ def load_oauth_client() -> Optional[dict]:
         return json.loads(oauth_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, IOError):
         return None
+
+
+# =============================================================================
+# Time Tracking Configuration
+# =============================================================================
+
+def is_time_tracking_enabled() -> bool:
+    """Check if time tracking feature is enabled."""
+    config = load_config()
+    return config.get("time_tracking", {}).get("enabled", False)
+
+
+def enable_time_tracking() -> None:
+    """Enable time tracking feature."""
+    config = load_config()
+    if "time_tracking" not in config:
+        config["time_tracking"] = {}
+    config["time_tracking"]["enabled"] = True
+    save_config(config)
+
+
+def disable_time_tracking() -> None:
+    """Disable time tracking feature."""
+    config = load_config()
+    if "time_tracking" not in config:
+        config["time_tracking"] = {}
+    config["time_tracking"]["enabled"] = False
+    save_config(config)

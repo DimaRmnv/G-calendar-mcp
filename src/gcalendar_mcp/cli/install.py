@@ -128,6 +128,7 @@ def install_dependencies(venv_python: Path) -> None:
         "google-auth-oauthlib>=1.1.0",
         "google-auth>=2.23.0",
         "fastmcp>=0.1.0",
+        "openpyxl>=3.1.0",
     ]
     
     subprocess.run(
