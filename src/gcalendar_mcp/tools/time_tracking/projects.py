@@ -36,7 +36,7 @@ async def time_tracking_projects(
         description: Project description (required for add)
         is_billable: Whether project is billable
         position: User's position/role on project
-        structure_level: Event format level (1=full, 2=phase only, 3=simple)
+        structure_level: Event format level (1=simple, 2=phase only, 3=full)
         billable_only: For 'list' - filter to billable projects only
         include_details: For 'get' - include phases and tasks
     
@@ -48,10 +48,10 @@ async def time_tracking_projects(
         - update: updated project
         - delete: {deleted: True/False}
     
-    Structure levels:
-        1: PROJECT * PHASE * TASK * Description (ADB25, CAYIB, EDD)
+    Structure levels (level = number of components after PROJECT):
+        1: PROJECT * Description (UFSP, CSUM, EFCF)
         2: PROJECT * PHASE * Description (BCH, BDU)
-        3: PROJECT * Description (UFSP, CSUM, EFCF)
+        3: PROJECT * PHASE * TASK * Description (ADB25, CAYIB, EDD)
     """
     ensure_database()
     
@@ -72,7 +72,7 @@ async def time_tracking_projects(
                 description=description,
                 is_billable=is_billable or False,
                 position=position,
-                structure_level=structure_level or 3
+                structure_level=structure_level or 1
             )
             return {"status": "created", "project": project}
         except Exception as e:

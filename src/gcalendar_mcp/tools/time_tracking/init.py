@@ -19,65 +19,65 @@ from gcalendar_mcp.tools.time_tracking.database import (
 
 # Default project data based on calendar-manager skill
 DEFAULT_PROJECTS = [
-    # Billable projects - Level 1 (full structure)
+    # Billable projects - Level 3 (full structure: PROJECT * PHASE * TASK * Description)
     {
         "code": "ADB25",
         "description": "ADB TSCFP 2025 - Trade and Supply Chain Finance Program",
         "is_billable": True,
         "position": "Senior Bank Advisor",
-        "structure_level": 1,
+        "structure_level": 3,
     },
     {
         "code": "CAYIB",
         "description": "Central Asia Youth In Business Programme",
         "is_billable": True,
         "position": "International MSME Banking Expert",
-        "structure_level": 1,
+        "structure_level": 3,
     },
     {
         "code": "EDD",
         "description": "Due Diligence Trade & Supply Chain (GIZ)",
         "is_billable": True,
         "position": "Due Diligence Expert",
-        "structure_level": 1,
+        "structure_level": 3,
     },
-    # Billable projects - Level 3 (simple)
+    # Billable projects - Level 1 (simple: PROJECT * Description)
     {
         "code": "UFSP",
         "description": "Uzbekistan Financial Sector Development",
         "is_billable": True,
         "position": "International MSME Banking Expert",
-        "structure_level": 3,
+        "structure_level": 1,
     },
     {
         "code": "CSUM",
         "description": "Capacity Strengthening of Uzbekistan MFOs",
         "is_billable": True,
         "position": "International MSME Banking Expert",
-        "structure_level": 3,
+        "structure_level": 1,
     },
     {
         "code": "SEDRA3",
         "description": "Nepal Rural Development - Revolving Fund",
         "is_billable": True,
         "position": "Revolving Fund Expert",
-        "structure_level": 3,
+        "structure_level": 1,
     },
     {
         "code": "EFCF",
         "description": "Jordan Education Finance Revolving Fund",
         "is_billable": True,
         "position": "Business Analyst",
-        "structure_level": 3,
+        "structure_level": 1,
     },
     {
         "code": "AIYL-MN",
         "description": "AIYL Software Maintenance",
         "is_billable": True,
         "position": "Business Analyst",
-        "structure_level": 3,
+        "structure_level": 1,
     },
-    # Non-billable projects - Level 2
+    # Non-billable projects - Level 2 (PROJECT * PHASE * Description)
     {
         "code": "BCH",
         "description": "BFC Internal Company Projects",
@@ -106,27 +106,27 @@ DEFAULT_PROJECTS = [
         "position": "Senior Bank Advisor",
         "structure_level": 2,
     },
-    # Non-billable - Level 3
+    # Non-billable - Level 1 (simple: PROJECT * Description)
     {
         "code": "MABI4",
         "description": "Intesa Master APS",
         "is_billable": False,
         "position": "Business Analyst",
-        "structure_level": 3,
+        "structure_level": 1,
     },
     {
         "code": "OPP",
         "description": "Opportunity Evaluation",
         "is_billable": False,
         "position": "Senior Bank Advisor",
-        "structure_level": 3,
+        "structure_level": 1,
     },
     {
         "code": "MAPS",
         "description": "Master APS Prospection & Internal Development",
         "is_billable": False,
         "position": "Business Analyst",
-        "structure_level": 3,
+        "structure_level": 1,
     },
 ]
 
@@ -359,7 +359,7 @@ async def time_tracking_init(
     
     Default data includes:
         - 15 projects (ADB25, CAYIB, EDD, BCH, BDU, CSUM, UFSP, etc.)
-        - Phases for Level 1 and 2 projects
+        - Phases for Level 2 and 3 projects
         - Task codes for ADB25, CAYIB, EDD
         - 2025 workday norms (Thailand calendar)
         - Default exclusions (Away, Lunch, Offline, Out of office)

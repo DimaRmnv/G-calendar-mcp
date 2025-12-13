@@ -55,7 +55,7 @@ def init_database() -> None:
                 description TEXT NOT NULL,
                 is_billable INTEGER NOT NULL DEFAULT 0,
                 position TEXT,
-                structure_level INTEGER NOT NULL DEFAULT 3,
+                structure_level INTEGER NOT NULL DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -162,7 +162,7 @@ def create_project(
     description: str,
     is_billable: bool = False,
     position: Optional[str] = None,
-    structure_level: int = 3
+    structure_level: int = 1
 ) -> dict:
     """Create a new project."""
     with get_connection() as conn:

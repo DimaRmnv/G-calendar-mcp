@@ -4,10 +4,10 @@ Event summary parser for time tracking.
 Parses Google Calendar event summaries to extract project code, phase, task, and description.
 Based on the format: PROJECT * PHASE * TASK * Description
 
-Supports three structure levels:
-- Level 1: PROJECT * PHASE * TASK * Description (ADB25, CAYIB, EDD)
+Supports three structure levels (level = number of components after PROJECT):
+- Level 1: PROJECT * Description (UFSP, CSUM, EFCF, SEDRA3, AIYL-MN)
 - Level 2: PROJECT * PHASE * Description (BCH, BDU, BDU-TEN)
-- Level 3: PROJECT * Description (UFSP, CSUM, EFCF, SEDRA3, AIYL-MN)
+- Level 3: PROJECT * PHASE * TASK * Description (ADB25, CAYIB, EDD)
 """
 
 import re
@@ -117,58 +117,28 @@ def parse_summary(summary: str) -> ParsedEvent:
     result.position = project["position"]
     structure_level = project["structure_level"]
     
-    # Parse based on structure level
-    if structure_level == 1:
-        # Level 1: PROJECT * PHASE * TASK * Description
-        result = _parse_level_1(parts, result)
+    # Parse based on structure level (level = number of components after PROJECT)
+    if structure_level == 3:
+        # Level 3: PROJECT * PHASE * TASK * Description
+        result = _parse_level_3(parts, result)
     elif structure_level == 2:
         # Level 2: PROJECT * PHASE * Description
         result = _parse_level_2(parts, result)
     else:
-        # Level 3: PROJECT * Description
-        result = _parse_level_3(parts, result)
+        # Level 1: PROJECT * Description
+        result = _parse_level_1(parts, result)
     
     return result
 
 
 def _parse_level_1(parts: list[str], result: ParsedEvent) -> ParsedEvent:
     """
-    Parse Level 1 structure: PROJECT * PHASE * TASK * Description
-    Used by: ADB25, CAYIB, EDD
+    Parse Level 1 structure: PROJECT * Description
+    Used by: UFSP, CSUM, EFCF, SEDRA3, AIYL-MN, MABI4
     """
-    if len(parts) < 2:
-        result.errors.append("Missing phase for Level 1 project")
-        return result
-    
-    # Part 1: Phase
-    potential_phase = parts[1].upper()
-    phase = get_phase(result.project_code, potential_phase)
-    
-    if phase:
-        result.phase_code = phase["phase_code"]
-    else:
-        # Phase not found - might be description
-        result.errors.append(f"Phase '{potential_phase}' not found")
+    if len(parts) > 1:
         result.description = ' * '.join(parts[1:])
-        return result
-    
-    if len(parts) < 3:
-        # Only project and phase, no task or description
-        return result
-    
-    # Part 2: Task or Description
-    potential_task = parts[2].upper()
-    task = get_task(result.project_code, potential_task)
-    
-    if task:
-        result.task_code = task["task_code"]
-        # Remaining parts are description
-        if len(parts) > 3:
-            result.description = ' * '.join(parts[3:])
-    else:
-        # Not a task code - treat as description
-        result.description = ' * '.join(parts[2:])
-    
+
     return result
 
 
@@ -184,7 +154,7 @@ def _parse_level_2(parts: list[str], result: ParsedEvent) -> ParsedEvent:
     # Part 1: Phase
     potential_phase = parts[1].upper()
     phase = get_phase(result.project_code, potential_phase)
-    
+
     if phase:
         result.phase_code = phase["phase_code"]
         # Remaining parts are description
@@ -200,12 +170,42 @@ def _parse_level_2(parts: list[str], result: ParsedEvent) -> ParsedEvent:
 
 def _parse_level_3(parts: list[str], result: ParsedEvent) -> ParsedEvent:
     """
-    Parse Level 3 structure: PROJECT * Description
-    Used by: UFSP, CSUM, EFCF, SEDRA3, AIYL-MN, MABI4
+    Parse Level 3 structure: PROJECT * PHASE * TASK * Description
+    Used by: ADB25, CAYIB, EDD
     """
-    if len(parts) > 1:
+    if len(parts) < 2:
+        result.errors.append("Missing phase for Level 3 project")
+        return result
+
+    # Part 1: Phase
+    potential_phase = parts[1].upper()
+    phase = get_phase(result.project_code, potential_phase)
+
+    if phase:
+        result.phase_code = phase["phase_code"]
+    else:
+        # Phase not found - might be description
+        result.errors.append(f"Phase '{potential_phase}' not found")
         result.description = ' * '.join(parts[1:])
-    
+        return result
+
+    if len(parts) < 3:
+        # Only project and phase, no task or description
+        return result
+
+    # Part 2: Task or Description
+    potential_task = parts[2].upper()
+    task = get_task(result.project_code, potential_task)
+
+    if task:
+        result.task_code = task["task_code"]
+        # Remaining parts are description
+        if len(parts) > 3:
+            result.description = ' * '.join(parts[3:])
+    else:
+        # Not a task code - treat as description
+        result.description = ' * '.join(parts[2:])
+
     return result
 
 
