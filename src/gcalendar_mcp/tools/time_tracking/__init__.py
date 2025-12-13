@@ -1,27 +1,15 @@
-"""Time tracking tools package.
+"""
+Time tracking tools for billable hours management.
 
-Provides project time tracking, billable hours reporting, and timesheet generation
-based on Google Calendar events.
+Two tools (optimized for token efficiency):
+- time_tracking: Batch management (projects, phases, tasks, norms, exclusions, config, init)
+- time_tracking_report: Status and reports (quick status, week/month reports, Excel export)
 """
 
-from gcalendar_mcp.tools.time_tracking.projects import time_tracking_projects
-from gcalendar_mcp.tools.time_tracking.phases import time_tracking_phases
-from gcalendar_mcp.tools.time_tracking.tasks import time_tracking_tasks
-from gcalendar_mcp.tools.time_tracking.norms import time_tracking_norms
-from gcalendar_mcp.tools.time_tracking.exclusions import time_tracking_exclusions
-from gcalendar_mcp.tools.time_tracking.settings import time_tracking_config
+from gcalendar_mcp.tools.time_tracking.manage import time_tracking
 from gcalendar_mcp.tools.time_tracking.report import time_tracking_report
-from gcalendar_mcp.tools.time_tracking.status import time_tracking_status
-from gcalendar_mcp.tools.time_tracking.init import time_tracking_init
 
 __all__ = [
-    "time_tracking_projects",
-    "time_tracking_phases",
-    "time_tracking_tasks",
-    "time_tracking_norms",
-    "time_tracking_exclusions",
-    "time_tracking_config",
+    "time_tracking",
     "time_tracking_report",
-    "time_tracking_status",
-    "time_tracking_init",
 ]

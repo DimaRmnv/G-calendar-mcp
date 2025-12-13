@@ -156,7 +156,7 @@ def _parse_level_2(parts: list[str], result: ParsedEvent) -> ParsedEvent:
     phase = get_phase(result.project_code, potential_phase)
 
     if phase:
-        result.phase_code = phase["phase_code"]
+        result.phase_code = phase["code"]
         # Remaining parts are description
         if len(parts) > 2:
             result.description = ' * '.join(parts[2:])
@@ -182,7 +182,7 @@ def _parse_level_3(parts: list[str], result: ParsedEvent) -> ParsedEvent:
     phase = get_phase(result.project_code, potential_phase)
 
     if phase:
-        result.phase_code = phase["phase_code"]
+        result.phase_code = phase["code"]
     else:
         # Phase not found - might be description
         result.errors.append(f"Phase '{potential_phase}' not found")
@@ -198,7 +198,7 @@ def _parse_level_3(parts: list[str], result: ParsedEvent) -> ParsedEvent:
     task = get_task(result.project_code, potential_task)
 
     if task:
-        result.task_code = task["task_code"]
+        result.task_code = task["code"]
         # Remaining parts are description
         if len(parts) > 3:
             result.description = ' * '.join(parts[3:])

@@ -2,6 +2,7 @@
 Database management for time tracking.
 
 SQLite database schema and operations for projects, phases, tasks, norms, and settings.
+All entities have integer id as primary key for batch operations.
 Database location: ~/.mcp/gcalendar/time_tracking.db
 """
 
@@ -9,7 +10,6 @@ import sqlite3
 from pathlib import Path
 from typing import Optional
 from contextlib import contextmanager
-from datetime import datetime
 
 from gcalendar_mcp.utils.config import get_app_dir
 
@@ -44,14 +44,15 @@ def get_connection():
 
 
 def init_database() -> None:
-    """Initialize database with schema."""
+    """Initialize database with schema. All tables have id as primary key."""
     with get_connection() as conn:
         cursor = conn.cursor()
-        
-        # Projects table
+
+        # Projects table - id is PK, code is unique
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS projects (
-                code TEXT PRIMARY KEY,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT NOT NULL UNIQUE,
                 description TEXT NOT NULL,
                 is_billable INTEGER NOT NULL DEFAULT 0,
                 position TEXT,
@@ -60,45 +61,45 @@ def init_database() -> None:
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        
-        # Phases table
+
+        # Phases table - references project by id
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS phases (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                project_code TEXT NOT NULL,
-                phase_code TEXT NOT NULL,
+                project_id INTEGER NOT NULL,
+                code TEXT NOT NULL,
                 description TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (project_code) REFERENCES projects(code) ON DELETE CASCADE,
-                UNIQUE(project_code, phase_code)
+                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+                UNIQUE(project_id, code)
             )
         """)
-        
-        # Tasks table
+
+        # Tasks table - references project by id
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS tasks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                project_code TEXT NOT NULL,
-                task_code TEXT NOT NULL,
+                project_id INTEGER NOT NULL,
+                code TEXT NOT NULL,
                 description TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (project_code) REFERENCES projects(code) ON DELETE CASCADE,
-                UNIQUE(project_code, task_code)
+                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+                UNIQUE(project_id, code)
             )
         """)
-        
+
         # Workday norms table
         cursor.execute("""
-            CREATE TABLE IF NOT EXISTS workday_norms (
+            CREATE TABLE IF NOT EXISTS norms (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 year INTEGER NOT NULL,
                 month INTEGER NOT NULL,
-                norm_hours INTEGER NOT NULL,
+                hours INTEGER NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(year, month)
             )
         """)
-        
+
         # Exclusions table (event patterns to skip)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS exclusions (
@@ -107,8 +108,8 @@ def init_database() -> None:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        
-        # Settings table (key-value)
+
+        # Settings table (key-value, no id needed)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
@@ -116,12 +117,13 @@ def init_database() -> None:
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        
+
         # Create indexes
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_phases_project ON phases(project_code)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_code)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_norms_year_month ON workday_norms(year, month)")
-        
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_phases_project ON phases(project_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_norms_year_month ON norms(year, month)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_projects_code ON projects(code)")
+
         # Insert default settings
         default_settings = [
             ("work_calendar", "primary"),
@@ -129,13 +131,13 @@ def init_database() -> None:
             ("billable_target_value", "75"),
             ("base_location", ""),
         ]
-        
+
         for key, value in default_settings:
             cursor.execute(
                 "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
                 (key, value)
             )
-        
+
         # Insert default exclusions
         default_exclusions = ["Away", "Lunch", "Offline", "Out of office"]
         for pattern in default_exclusions:
@@ -157,14 +159,14 @@ def ensure_database() -> bool:
 # Projects CRUD
 # =============================================================================
 
-def create_project(
+def project_add(
     code: str,
     description: str,
     is_billable: bool = False,
     position: Optional[str] = None,
     structure_level: int = 1
 ) -> dict:
-    """Create a new project."""
+    """Create a new project. Returns created project with id."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -175,6 +177,7 @@ def create_project(
             (code.upper(), description, int(is_billable), position, structure_level)
         )
         return {
+            "id": cursor.lastrowid,
             "code": code.upper(),
             "description": description,
             "is_billable": is_billable,
@@ -183,11 +186,16 @@ def create_project(
         }
 
 
-def get_project(code: str) -> Optional[dict]:
-    """Get project by code."""
+def project_get(id: Optional[int] = None, code: Optional[str] = None) -> Optional[dict]:
+    """Get project by id or code."""
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM projects WHERE code = ?", (code.upper(),))
+        if id is not None:
+            cursor.execute("SELECT * FROM projects WHERE id = ?", (id,))
+        elif code is not None:
+            cursor.execute("SELECT * FROM projects WHERE code = ?", (code.upper(),))
+        else:
+            return None
         row = cursor.fetchone()
         if row:
             result = dict(row)
@@ -196,7 +204,7 @@ def get_project(code: str) -> Optional[dict]:
         return None
 
 
-def list_projects(billable_only: bool = False) -> list[dict]:
+def project_list(billable_only: bool = False) -> list[dict]:
     """List all projects."""
     with get_connection() as conn:
         cursor = conn.cursor()
@@ -212,36 +220,38 @@ def list_projects(billable_only: bool = False) -> list[dict]:
         return results
 
 
-def update_project(code: str, **kwargs) -> Optional[dict]:
-    """Update project fields."""
-    allowed_fields = {"description", "is_billable", "position", "structure_level"}
+def project_update(id: int, **kwargs) -> Optional[dict]:
+    """Update project by id."""
+    allowed_fields = {"code", "description", "is_billable", "position", "structure_level"}
     updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
-    
+
     if not updates:
-        return get_project(code)
-    
+        return project_get(id=id)
+
     if "is_billable" in updates:
         updates["is_billable"] = int(updates["is_billable"])
-    
+    if "code" in updates:
+        updates["code"] = updates["code"].upper()
+
     set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
-    values = list(updates.values()) + [code.upper()]
-    
+    values = list(updates.values()) + [id]
+
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            f"UPDATE projects SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE code = ?",
+            f"UPDATE projects SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             values
         )
         if cursor.rowcount == 0:
             return None
-        return get_project(code)
+        return project_get(id=id)
 
 
-def delete_project(code: str) -> bool:
-    """Delete project and associated phases/tasks (cascading)."""
+def project_delete(id: int) -> bool:
+    """Delete project by id (cascades to phases/tasks)."""
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM projects WHERE code = ?", (code.upper(),))
+        cursor.execute("DELETE FROM projects WHERE id = ?", (id,))
         return cursor.rowcount > 0
 
 
@@ -249,69 +259,80 @@ def delete_project(code: str) -> bool:
 # Phases CRUD
 # =============================================================================
 
-def create_phase(project_code: str, phase_code: str, description: Optional[str] = None) -> dict:
+def phase_add(project_id: int, code: str, description: Optional[str] = None) -> dict:
     """Create a new phase for a project."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO phases (project_code, phase_code, description) VALUES (?, ?, ?)",
-            (project_code.upper(), phase_code.upper(), description)
+            "INSERT INTO phases (project_id, code, description) VALUES (?, ?, ?)",
+            (project_id, code.upper(), description)
         )
         return {
             "id": cursor.lastrowid,
-            "project_code": project_code.upper(),
-            "phase_code": phase_code.upper(),
+            "project_id": project_id,
+            "code": code.upper(),
             "description": description
         }
 
 
-def get_phase(project_code: str, phase_code: str) -> Optional[dict]:
-    """Get phase by project and phase code."""
+def phase_get(id: Optional[int] = None, project_id: Optional[int] = None, code: Optional[str] = None) -> Optional[dict]:
+    """Get phase by id or by project_id + code."""
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM phases WHERE project_code = ? AND phase_code = ?",
-            (project_code.upper(), phase_code.upper())
-        )
+        if id is not None:
+            cursor.execute("SELECT * FROM phases WHERE id = ?", (id,))
+        elif project_id is not None and code is not None:
+            cursor.execute(
+                "SELECT * FROM phases WHERE project_id = ? AND code = ?",
+                (project_id, code.upper())
+            )
+        else:
+            return None
         row = cursor.fetchone()
         return dict(row) if row else None
 
 
-def list_phases(project_code: Optional[str] = None) -> list[dict]:
+def phase_list(project_id: Optional[int] = None) -> list[dict]:
     """List phases, optionally filtered by project."""
     with get_connection() as conn:
         cursor = conn.cursor()
-        if project_code:
+        if project_id is not None:
             cursor.execute(
-                "SELECT * FROM phases WHERE project_code = ? ORDER BY phase_code",
-                (project_code.upper(),)
+                "SELECT * FROM phases WHERE project_id = ? ORDER BY code",
+                (project_id,)
             )
         else:
-            cursor.execute("SELECT * FROM phases ORDER BY project_code, phase_code")
+            cursor.execute("SELECT * FROM phases ORDER BY project_id, code")
         return [dict(row) for row in cursor.fetchall()]
 
 
-def update_phase(project_code: str, phase_code: str, description: str) -> Optional[dict]:
-    """Update phase description."""
+def phase_update(id: int, **kwargs) -> Optional[dict]:
+    """Update phase by id."""
+    allowed_fields = {"code", "description"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
+
+    if not updates:
+        return phase_get(id=id)
+
+    if "code" in updates:
+        updates["code"] = updates["code"].upper()
+
+    set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
+    values = list(updates.values()) + [id]
+
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE phases SET description = ? WHERE project_code = ? AND phase_code = ?",
-            (description, project_code.upper(), phase_code.upper())
-        )
+        cursor.execute(f"UPDATE phases SET {set_clause} WHERE id = ?", values)
         if cursor.rowcount == 0:
             return None
-        return get_phase(project_code, phase_code)
+        return phase_get(id=id)
 
 
-def delete_phase(project_code: str, phase_code: str) -> bool:
-    """Delete a phase."""
+def phase_delete(id: int) -> bool:
+    """Delete phase by id."""
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "DELETE FROM phases WHERE project_code = ? AND phase_code = ?",
-            (project_code.upper(), phase_code.upper())
-        )
+        cursor.execute("DELETE FROM phases WHERE id = ?", (id,))
         return cursor.rowcount > 0
 
 
@@ -319,125 +340,135 @@ def delete_phase(project_code: str, phase_code: str) -> bool:
 # Tasks CRUD
 # =============================================================================
 
-def create_task(project_code: str, task_code: str, description: Optional[str] = None) -> dict:
+def task_add(project_id: int, code: str, description: Optional[str] = None) -> dict:
     """Create a new task for a project."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO tasks (project_code, task_code, description) VALUES (?, ?, ?)",
-            (project_code.upper(), task_code.upper(), description)
+            "INSERT INTO tasks (project_id, code, description) VALUES (?, ?, ?)",
+            (project_id, code.upper(), description)
         )
         return {
             "id": cursor.lastrowid,
-            "project_code": project_code.upper(),
-            "task_code": task_code.upper(),
+            "project_id": project_id,
+            "code": code.upper(),
             "description": description
         }
 
 
-def get_task(project_code: str, task_code: str) -> Optional[dict]:
-    """Get task by project and task code."""
+def task_get(id: Optional[int] = None, project_id: Optional[int] = None, code: Optional[str] = None) -> Optional[dict]:
+    """Get task by id or by project_id + code."""
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM tasks WHERE project_code = ? AND task_code = ?",
-            (project_code.upper(), task_code.upper())
-        )
+        if id is not None:
+            cursor.execute("SELECT * FROM tasks WHERE id = ?", (id,))
+        elif project_id is not None and code is not None:
+            cursor.execute(
+                "SELECT * FROM tasks WHERE project_id = ? AND code = ?",
+                (project_id, code.upper())
+            )
+        else:
+            return None
         row = cursor.fetchone()
         return dict(row) if row else None
 
 
-def list_tasks(project_code: Optional[str] = None) -> list[dict]:
+def task_list(project_id: Optional[int] = None) -> list[dict]:
     """List tasks, optionally filtered by project."""
     with get_connection() as conn:
         cursor = conn.cursor()
-        if project_code:
+        if project_id is not None:
             cursor.execute(
-                "SELECT * FROM tasks WHERE project_code = ? ORDER BY task_code",
-                (project_code.upper(),)
+                "SELECT * FROM tasks WHERE project_id = ? ORDER BY code",
+                (project_id,)
             )
         else:
-            cursor.execute("SELECT * FROM tasks ORDER BY project_code, task_code")
+            cursor.execute("SELECT * FROM tasks ORDER BY project_id, code")
         return [dict(row) for row in cursor.fetchall()]
 
 
-def update_task(project_code: str, task_code: str, description: str) -> Optional[dict]:
-    """Update task description."""
+def task_update(id: int, **kwargs) -> Optional[dict]:
+    """Update task by id."""
+    allowed_fields = {"code", "description"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
+
+    if not updates:
+        return task_get(id=id)
+
+    if "code" in updates:
+        updates["code"] = updates["code"].upper()
+
+    set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
+    values = list(updates.values()) + [id]
+
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE tasks SET description = ? WHERE project_code = ? AND task_code = ?",
-            (description, project_code.upper(), task_code.upper())
-        )
+        cursor.execute(f"UPDATE tasks SET {set_clause} WHERE id = ?", values)
         if cursor.rowcount == 0:
             return None
-        return get_task(project_code, task_code)
+        return task_get(id=id)
 
 
-def delete_task(project_code: str, task_code: str) -> bool:
-    """Delete a task."""
+def task_delete(id: int) -> bool:
+    """Delete task by id."""
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "DELETE FROM tasks WHERE project_code = ? AND task_code = ?",
-            (project_code.upper(), task_code.upper())
-        )
+        cursor.execute("DELETE FROM tasks WHERE id = ?", (id,))
         return cursor.rowcount > 0
 
 
 # =============================================================================
-# Workday Norms CRUD
+# Norms CRUD
 # =============================================================================
 
-def set_norm(year: int, month: int, norm_hours: int) -> dict:
-    """Set workday norm for a month (insert or update)."""
+def norm_add(year: int, month: int, hours: int) -> dict:
+    """Add or update workday norm for a month."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT INTO workday_norms (year, month, norm_hours)
+            INSERT INTO norms (year, month, hours)
             VALUES (?, ?, ?)
-            ON CONFLICT(year, month) DO UPDATE SET norm_hours = excluded.norm_hours
+            ON CONFLICT(year, month) DO UPDATE SET hours = excluded.hours
             """,
-            (year, month, norm_hours)
+            (year, month, hours)
         )
-        return {"year": year, "month": month, "norm_hours": norm_hours}
+        # Get the id
+        cursor.execute("SELECT id FROM norms WHERE year = ? AND month = ?", (year, month))
+        row = cursor.fetchone()
+        return {"id": row["id"], "year": year, "month": month, "hours": hours}
 
 
-def get_norm(year: int, month: int) -> Optional[dict]:
-    """Get workday norm for a specific month."""
+def norm_get(id: Optional[int] = None, year: Optional[int] = None, month: Optional[int] = None) -> Optional[dict]:
+    """Get norm by id or by year + month."""
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM workday_norms WHERE year = ? AND month = ?",
-            (year, month)
-        )
+        if id is not None:
+            cursor.execute("SELECT * FROM norms WHERE id = ?", (id,))
+        elif year is not None and month is not None:
+            cursor.execute("SELECT * FROM norms WHERE year = ? AND month = ?", (year, month))
+        else:
+            return None
         row = cursor.fetchone()
         return dict(row) if row else None
 
 
-def list_norms(year: Optional[int] = None) -> list[dict]:
-    """List workday norms, optionally filtered by year."""
+def norm_list(year: Optional[int] = None) -> list[dict]:
+    """List norms, optionally filtered by year."""
     with get_connection() as conn:
         cursor = conn.cursor()
-        if year:
-            cursor.execute(
-                "SELECT * FROM workday_norms WHERE year = ? ORDER BY month",
-                (year,)
-            )
+        if year is not None:
+            cursor.execute("SELECT * FROM norms WHERE year = ? ORDER BY month", (year,))
         else:
-            cursor.execute("SELECT * FROM workday_norms ORDER BY year DESC, month")
+            cursor.execute("SELECT * FROM norms ORDER BY year DESC, month")
         return [dict(row) for row in cursor.fetchall()]
 
 
-def delete_norm(year: int, month: int) -> bool:
-    """Delete workday norm."""
+def norm_delete(id: int) -> bool:
+    """Delete norm by id."""
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "DELETE FROM workday_norms WHERE year = ? AND month = ?",
-            (year, month)
-        )
+        cursor.execute("DELETE FROM norms WHERE id = ?", (id,))
         return cursor.rowcount > 0
 
 
@@ -445,7 +476,7 @@ def delete_norm(year: int, month: int) -> bool:
 # Exclusions CRUD
 # =============================================================================
 
-def add_exclusion(pattern: str) -> dict:
+def exclusion_add(pattern: str) -> dict:
     """Add exclusion pattern."""
     with get_connection() as conn:
         cursor = conn.cursor()
@@ -453,10 +484,15 @@ def add_exclusion(pattern: str) -> dict:
             "INSERT OR IGNORE INTO exclusions (pattern) VALUES (?)",
             (pattern,)
         )
-        return {"pattern": pattern, "created": cursor.rowcount > 0}
+        if cursor.rowcount > 0:
+            return {"id": cursor.lastrowid, "pattern": pattern, "created": True}
+        # Already exists, get id
+        cursor.execute("SELECT id FROM exclusions WHERE pattern = ?", (pattern,))
+        row = cursor.fetchone()
+        return {"id": row["id"], "pattern": pattern, "created": False}
 
 
-def list_exclusions() -> list[dict]:
+def exclusion_list() -> list[dict]:
     """List all exclusion patterns."""
     with get_connection() as conn:
         cursor = conn.cursor()
@@ -464,11 +500,11 @@ def list_exclusions() -> list[dict]:
         return [dict(row) for row in cursor.fetchall()]
 
 
-def delete_exclusion(pattern: str) -> bool:
-    """Delete exclusion pattern."""
+def exclusion_delete(id: int) -> bool:
+    """Delete exclusion by id."""
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM exclusions WHERE pattern = ?", (pattern,))
+        cursor.execute("DELETE FROM exclusions WHERE id = ?", (id,))
         return cursor.rowcount > 0
 
 
@@ -485,7 +521,7 @@ def is_excluded(event_summary: str) -> bool:
 # Settings CRUD
 # =============================================================================
 
-def get_setting(key: str) -> Optional[str]:
+def config_get(key: str) -> Optional[str]:
     """Get setting value by key."""
     with get_connection() as conn:
         cursor = conn.cursor()
@@ -494,7 +530,7 @@ def get_setting(key: str) -> Optional[str]:
         return row["value"] if row else None
 
 
-def set_setting(key: str, value: str) -> dict:
+def config_set(key: str, value: str) -> dict:
     """Set setting value."""
     with get_connection() as conn:
         cursor = conn.cursor()
@@ -509,7 +545,7 @@ def set_setting(key: str, value: str) -> dict:
         return {"key": key, "value": value}
 
 
-def get_all_settings() -> dict[str, str]:
+def config_list() -> dict[str, str]:
     """Get all settings as dictionary."""
     with get_connection() as conn:
         cursor = conn.cursor()
@@ -518,66 +554,33 @@ def get_all_settings() -> dict[str, str]:
 
 
 # =============================================================================
-# Utility functions
+# Utility functions for parser (lookup by code)
 # =============================================================================
 
-def get_project_with_details(code: str) -> Optional[dict]:
-    """Get project with its phases and tasks."""
-    project = get_project(code)
+def get_project_by_code(code: str) -> Optional[dict]:
+    """Get project by code (for parser)."""
+    return project_get(code=code)
+
+
+def get_phase_by_code(project_code: str, phase_code: str) -> Optional[dict]:
+    """Get phase by project code and phase code (for parser)."""
+    project = project_get(code=project_code)
     if not project:
         return None
-    
-    project["phases"] = list_phases(code)
-    project["tasks"] = list_tasks(code)
-    return project
+    return phase_get(project_id=project["id"], code=phase_code)
 
 
-def validate_event_components(
-    project_code: str,
-    phase_code: Optional[str] = None,
-    task_code: Optional[str] = None
-) -> dict:
-    """
-    Validate project/phase/task codes against database.
-    Returns validation result with details.
-    """
-    result = {
-        "valid": True,
-        "project_valid": False,
-        "phase_valid": None,
-        "task_valid": None,
-        "project": None,
-        "errors": []
-    }
-    
-    # Check project
-    project = get_project(project_code)
-    if project:
-        result["project_valid"] = True
-        result["project"] = project
-    else:
-        result["valid"] = False
-        result["errors"].append(f"Project code '{project_code}' not found")
-        return result
-    
-    # Check phase if provided
-    if phase_code:
-        phase = get_phase(project_code, phase_code)
-        if phase:
-            result["phase_valid"] = True
-        else:
-            result["phase_valid"] = False
-            result["valid"] = False
-            result["errors"].append(f"Phase '{phase_code}' not found for project '{project_code}'")
-    
-    # Check task if provided
-    if task_code:
-        task = get_task(project_code, task_code)
-        if task:
-            result["task_valid"] = True
-        else:
-            result["task_valid"] = False
-            result["valid"] = False
-            result["errors"].append(f"Task '{task_code}' not found for project '{project_code}'")
-    
-    return result
+def get_task_by_code(project_code: str, task_code: str) -> Optional[dict]:
+    """Get task by project code and task code (for parser)."""
+    project = project_get(code=project_code)
+    if not project:
+        return None
+    return task_get(project_id=project["id"], code=task_code)
+
+
+# Aliases for backward compatibility with parser
+get_project = get_project_by_code
+get_phase = get_phase_by_code
+get_task = get_task_by_code
+get_setting = config_get
+get_norm = lambda year, month: norm_get(year=year, month=month)
