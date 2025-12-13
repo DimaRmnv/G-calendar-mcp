@@ -94,7 +94,7 @@ def init_database() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 year INTEGER NOT NULL,
                 month INTEGER NOT NULL,
-                hours INTEGER NOT NULL,
+                hours REAL NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(year, month)
             )
@@ -421,7 +421,7 @@ def task_delete(id: int) -> bool:
 # Norms CRUD
 # =============================================================================
 
-def norm_add(year: int, month: int, hours: int) -> dict:
+def norm_add(year: int, month: int, hours: float) -> dict:
     """Add or update workday norm for a month."""
     with get_connection() as conn:
         cursor = conn.cursor()
