@@ -12,6 +12,7 @@ Handles:
 
 from typing import Optional, Any
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from google_calendar.api.client import get_service
 
@@ -256,7 +257,7 @@ def update_event(
     """
     service = get_service(account)
 
-    # If timezone provided without start/end, fetch current times
+    # If timezone provided without start/end, fetch current times and convert
     if timezone and start is None and end is None:
         current = service.events().get(
             calendarId=calendar_id,
@@ -265,24 +266,24 @@ def update_event(
         current_start = current.get("start", {})
         current_end = current.get("end", {})
 
-        # Extract current times (use dateTime or date)
+        # Extract current times and convert to new timezone
         if "dateTime" in current_start:
-            # Timed event - extract time without offset for reinterpretation
-            start_dt = current_start["dateTime"]
-            end_dt = current_end.get("dateTime", "")
-            # Strip offset if present (e.g., 2025-01-15T10:00:00+05:00 -> 2025-01-15T10:00:00)
-            if "+" in start_dt:
-                start = start_dt.split("+")[0]
-            elif start_dt.endswith("Z"):
-                start = start_dt[:-1]
-            else:
-                start = start_dt
-            if "+" in end_dt:
-                end = end_dt.split("+")[0]
-            elif end_dt.endswith("Z"):
-                end = end_dt[:-1]
-            else:
-                end = end_dt
+            # Parse with offset to get absolute moment
+            start_dt_str = current_start["dateTime"]
+            end_dt_str = current_end.get("dateTime", "")
+
+            # Parse ISO format (handles +05:00 and Z)
+            start_dt = datetime.fromisoformat(start_dt_str.replace("Z", "+00:00"))
+            end_dt = datetime.fromisoformat(end_dt_str.replace("Z", "+00:00"))
+
+            # Convert to new timezone
+            new_tz = ZoneInfo(timezone)
+            start_local = start_dt.astimezone(new_tz)
+            end_local = end_dt.astimezone(new_tz)
+
+            # Format as local time without offset (timezone will be in separate field)
+            start = start_local.strftime("%Y-%m-%dT%H:%M:%S")
+            end = end_local.strftime("%Y-%m-%dT%H:%M:%S")
         # else: all-day event - timezone doesn't apply
 
     # Build patch body
