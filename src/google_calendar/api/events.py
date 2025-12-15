@@ -255,19 +255,48 @@ def update_event(
         Updated event resource.
     """
     service = get_service(account)
-    
+
+    # If timezone provided without start/end, fetch current times
+    if timezone and start is None and end is None:
+        current = service.events().get(
+            calendarId=calendar_id,
+            eventId=event_id
+        ).execute()
+        current_start = current.get("start", {})
+        current_end = current.get("end", {})
+
+        # Extract current times (use dateTime or date)
+        if "dateTime" in current_start:
+            # Timed event - extract time without offset for reinterpretation
+            start_dt = current_start["dateTime"]
+            end_dt = current_end.get("dateTime", "")
+            # Strip offset if present (e.g., 2025-01-15T10:00:00+05:00 -> 2025-01-15T10:00:00)
+            if "+" in start_dt:
+                start = start_dt.split("+")[0]
+            elif start_dt.endswith("Z"):
+                start = start_dt[:-1]
+            else:
+                start = start_dt
+            if "+" in end_dt:
+                end = end_dt.split("+")[0]
+            elif end_dt.endswith("Z"):
+                end = end_dt[:-1]
+            else:
+                end = end_dt
+        # else: all-day event - timezone doesn't apply
+
     # Build patch body
     patch = {}
-    
+
     if summary is not None:
         patch["summary"] = summary
-    
+
     if description is not None:
         patch["description"] = description
-    
+
     if location is not None:
         patch["location"] = location
-    
+
     if start is not None:
         is_all_day = _is_date_only(start)
         if is_all_day:
