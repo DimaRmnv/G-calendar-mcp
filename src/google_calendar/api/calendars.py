@@ -81,7 +81,7 @@ def get_calendar(
 def get_calendar_colors(account: Optional[str] = None) -> dict:
     """
     Get available calendar and event colors.
-    
+
     Returns:
         {
             "calendar": {color_id: {"background": "#hex", "foreground": "#hex"}},
@@ -89,10 +89,131 @@ def get_calendar_colors(account: Optional[str] = None) -> dict:
         }
     """
     service = get_service(account)
-    
+
     result = service.colors().get().execute()
-    
+
     return {
         "calendar": result.get("calendar", {}),
         "event": result.get("event", {}),
     }
+
+
+def create_calendar(
+    summary: str,
+    account: Optional[str] = None,
+    description: Optional[str] = None,
+    timezone: Optional[str] = None,
+    location: Optional[str] = None,
+) -> dict:
+    """
+    Create a new secondary calendar.
+
+    Args:
+        summary: Calendar name
+        account: Account name
+        description: Calendar description
+        timezone: IANA timezone (e.g., 'Europe/Kyiv')
+        location: Geographic location
+
+    Returns:
+        Created calendar resource with id, summary, etc.
+    """
+    service = get_service(account)
+
+    body = {"summary": summary}
+
+    if description:
+        body["description"] = description
+
+    if timezone:
+        body["timeZone"] = timezone
+
+    if location:
+        body["location"] = location
+
+    return service.calendars().insert(body=body).execute()
+
+
+def update_calendar(
+    calendar_id: str,
+    account: Optional[str] = None,
+    summary: Optional[str] = None,
+    description: Optional[str] = None,
+    timezone: Optional[str] = None,
+    location: Optional[str] = None,
+) -> dict:
+    """
+    Update calendar properties.
+
+    Args:
+        calendar_id: Calendar ID to update
+        account: Account name
+        summary: New calendar name
+        description: New description
+        timezone: New timezone (IANA format)
+        location: New location
+
+    Returns:
+        Updated calendar resource.
+    """
+    service = get_service(account)
+
+    patch = {}
+
+    if summary is not None:
+        patch["summary"] = summary
+
+    if description is not None:
+        patch["description"] = description
+
+    if timezone is not None:
+        patch["timeZone"] = timezone
+
+    if location is not None:
+        patch["location"] = location
+
+    return service.calendars().patch(calendarId=calendar_id, body=patch).execute()
+
+
+def delete_calendar(
+    calendar_id: str,
+    account: Optional[str] = None,
+) -> None:
+    """
+    Delete a secondary calendar.
+
+    Note: Cannot delete primary calendar.
+
+    Args:
+        calendar_id: Calendar ID to delete
+        account: Account name
+    """
+    service = get_service(account)
+
+    service.calendars().delete(calendarId=calendar_id).execute()
+
+
+def get_calendar_acl(
+    calendar_id: str = "primary",
+    account: Optional[str] = None,
+) -> list[dict]:
+    """
+    Get calendar access control list (permissions).
+
+    Returns:
+        List of ACL rules with role and scope.
+    """
+    service = get_service(account)
+
+    result = service.acl().list(calendarId=calendar_id).execute()
+
+    rules = []
+    for item in result.get("items", []):
+        rules.append({
+            "id": item.get("id"),
+            "role": item.get("role"),
+            "scope_type": item.get("scope", {}).get("type"),
+            "scope_value": item.get("scope", {}).get("value"),
+        })
+
+    return rules

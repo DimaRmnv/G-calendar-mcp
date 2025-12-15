@@ -12,6 +12,7 @@ from google_calendar.api.events import (
     get_event as api_get_event,
     get_recurring_instances,
     is_recurring_instance,
+    move_event as api_move_event,
 )
 
 
@@ -34,11 +35,12 @@ def update_event(
     visibility: Optional[str] = None,
     transparency: Optional[str] = None,
     extended_properties: Optional[dict] = None,
+    destination_calendar_id: Optional[str] = None,
     send_updates: str = "all",
     account: Optional[str] = None,
 ) -> dict:
     """
-    Update an existing calendar event.
+    Update an existing calendar event or move it to another calendar.
 
     IMPORTANT - ACCOUNT SELECTION:
     When user mentions "личный календарь", "personal", "рабочий", "work", etc.:
@@ -47,13 +49,20 @@ def update_event(
     3. Pass account="personal" (or matched name) to this function
     Do NOT use default account when user specifies a calendar name!
 
+    MOVE EVENT TO ANOTHER CALENDAR:
+    To move an event to a different calendar:
+    1. FIRST call manage_calendars(action="list") to get available calendars and their IDs
+    2. Find the target calendar ID from the list
+    3. Pass destination_calendar_id with the target calendar's ID
+    The event will be moved and can be updated simultaneously.
+
     NOTE: If skill 'calendar-manager' is available, follow its guidelines for event formatting (summary, description, etc.).
 
     Args:
         event_id: Event ID to update. For recurring events, can be either:
             - Instance ID (e.g., "abc123_20250115T100000Z") for specific occurrence
             - Master ID for the recurring series
-        calendar_id: Calendar ID (use 'primary' for the main calendar)
+        calendar_id: Source calendar ID (use 'primary' for the main calendar)
         scope: How to apply changes for recurring events:
             - 'single': Update only this instance (default). If event_id is master, updates first upcoming instance.
             - 'all': Update all instances (past and future). Requires master event ID.
@@ -73,9 +82,11 @@ def update_event(
         visibility: 'public', 'private', or 'confidential'
         transparency: 'opaque' (busy) or 'transparent' (free)
         extended_properties: Update extended properties {"private": {...}, "shared": {...}}
+        destination_calendar_id: Move event to this calendar. Get calendar IDs from manage_calendars(action="list").
+            When provided, the event is moved first, then any other updates are applied.
         send_updates: 'all', 'externalOnly', or 'none' for notification control
         account: Account name (uses default if not specified)
-    
+
     Returns:
         Dictionary with updated event details:
         - id: Event ID (may differ from input if instance was created)
@@ -87,7 +98,8 @@ def update_event(
         - attendees: Number of attendees
         - status: Event status
         - scope_applied: Which scope was actually applied
-    
+        - moved_to: Destination calendar ID (if event was moved)
+
     Only provided fields are updated; others remain unchanged.
     """
     # Determine if this is a recurring event and resolve the target event ID
@@ -122,7 +134,60 @@ def update_event(
                 if instances:
                     target_event_id = instances[0]["id"]
             scope_applied = "single"
-    
+
+    # Handle move to another calendar
+    moved_to = None
+    actual_calendar_id = calendar_id
+    if destination_calendar_id:
+        move_result = api_move_event(
+            event_id=target_event_id,
+            destination_calendar_id=destination_calendar_id,
+            source_calendar_id=calendar_id,
+            account=account,
+            send_updates=send_updates,
+        )
+        # Update target_event_id in case it changed (usually stays the same)
+        target_event_id = move_result.get("id", target_event_id)
+        moved_to = destination_calendar_id
+        actual_calendar_id = destination_calendar_id
+
+    # Check if there are any other updates to apply
+    has_updates = any([
+        summary is not None,
+        start is not None,
+        end is not None,
+        description is not None,
+        location is not None,
+        timezone is not None,
+        attendees is not None,
+        add_attendees,
+        remove_attendees,
+        add_meet_link,
+        reminders_minutes is not None,
+        color_id is not None,
+        visibility is not None,
+        transparency is not None,
+        extended_properties is not None,
+    ])
+
+    # If only move was requested, return move result
+    if not has_updates and moved_to:
+        start_time = move_result.get("start", {})
+        end_time = move_result.get("end", {})
+        return {
+            "id": move_result.get("id"),
+            "summary": move_result.get("summary"),
+            "htmlLink": move_result.get("htmlLink"),
+            "start": start_time.get("dateTime") or start_time.get("date"),
+            "end": end_time.get("dateTime") or end_time.get("date"),
+            "meetLink": None,
+            "attendees": len(move_result.get("attendees", [])),
+            "status": move_result.get("status"),
+            "scope_applied": scope_applied,
+            "is_recurring": is_recurring,
+            "moved_to": moved_to,
+        }
+
     # Handle incremental attendee changes
     attendees_list = None
     if attendees is not None:
@@ -163,11 +228,11 @@ def update_event(
             }
         }
     
-    # Call API
+    # Call API (use actual_calendar_id in case event was moved)
     result = api_update_event(
         event_id=target_event_id,
         account=account,
-        calendar_id=calendar_id,
+        calendar_id=actual_calendar_id,
         summary=summary,
         start=start,
         end=end,
@@ -196,7 +261,7 @@ def update_event(
     start_time = result.get("start", {})
     end_time = result.get("end", {})
     
-    return {
+    response = {
         "id": result.get("id"),
         "summary": result.get("summary"),
         "htmlLink": result.get("htmlLink"),
@@ -208,3 +273,8 @@ def update_event(
         "scope_applied": scope_applied,
         "is_recurring": is_recurring,
     }
+
+    if moved_to:
+        response["moved_to"] = moved_to
+
+    return response

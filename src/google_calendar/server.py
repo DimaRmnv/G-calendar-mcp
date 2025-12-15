@@ -15,7 +15,7 @@ from google_calendar.tools.crud import (
     search_events,
     get_freebusy,
 )
-from google_calendar.tools.reference import list_calendars, list_colors, manage_settings
+from google_calendar.tools.reference import manage_calendars, list_colors, manage_settings
 from google_calendar.tools.attendees import manage_attendees, respond_to_event
 from google_calendar.tools.intelligence import batch_operations, find_meeting_slots, weekly_brief
 from google_calendar.utils.config import load_config
@@ -52,7 +52,8 @@ Modify: update_event (scope="single"|"all"|"following" for recurring)
 Delete: delete_event (scope="single"|"all" for recurring)
 Search: search_events | Availability: get_freebusy, find_meeting_slots
 Attendees: manage_attendees | Bulk: batch_operations
-Reference: list_calendars, list_colors, manage_settings
+Reference: manage_calendars, list_colors, manage_settings
+Move event: update_event(destination_calendar_id=...) - call manage_calendars(action="list") first
 
 TIME TRACKING (if enabled):
 time_tracking(operations=[...]) | time_tracking_report(report_type, output_format)
@@ -70,7 +71,7 @@ mcp.tool(search_events)
 mcp.tool(get_freebusy)
 
 # Reference tools
-mcp.tool(list_calendars)
+mcp.tool(manage_calendars)
 mcp.tool(list_colors)
 mcp.tool(manage_settings)
 
