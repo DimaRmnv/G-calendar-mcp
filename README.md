@@ -140,7 +140,7 @@ python -m google_calendar time-tracking init --no-defaults  # Empty database
 ### Data Storage
 
 ```
-~/.mcp/google_calendar/
+~/.mcp/google-calendar/
 ├── time_tracking.db     # SQLite database
 ├── reports/             # Generated Excel files
 └── ...
@@ -302,7 +302,7 @@ python -m google_calendar serve             # Run server directly
 ## Data Storage
 
 ```
-~/.mcp/google_calendar/
+~/.mcp/google-calendar/
 ├── config.json          # Account registry, feature flags
 ├── oauth_client.json    # Google OAuth credentials
 ├── time_tracking.db     # Time tracking database (if enabled)

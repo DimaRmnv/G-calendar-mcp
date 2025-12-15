@@ -2,7 +2,7 @@
 Install CLI command.
 
 Adds google-calendar-mcp to Claude Desktop configuration.
-Optionally copies package to ~/.mcp/google_calendar/ for standalone operation.
+Optionally copies package to ~/.mcp/google-calendar/ for standalone operation.
 """
 
 import json
@@ -24,8 +24,8 @@ def get_claude_config_path() -> Path:
 
 
 def get_mcp_app_dir() -> Path:
-    """Get ~/.mcp/google_calendar/ directory."""
-    return Path.home() / ".mcp" / "google_calendar"
+    """Get ~/.mcp/google-calendar/ directory."""
+    return Path.home() / ".mcp" / "google-calendar"
 
 
 def get_installed_venv_python() -> Path:
@@ -72,7 +72,7 @@ def save_claude_config(config: dict) -> None:
 
 def copy_package_to_mcp() -> Path:
     """
-    Copy google_calendar package to ~/.mcp/google_calendar/src/.
+    Copy google_calendar package to ~/.mcp/google-calendar/src/.
     
     Returns path to installed package.
     """
@@ -97,7 +97,7 @@ def copy_package_to_mcp() -> Path:
 
 def create_venv() -> Path:
     """
-    Create venv in ~/.mcp/google_calendar/venv/.
+    Create venv in ~/.mcp/google-calendar/venv/.
     
     Returns path to venv Python.
     """
@@ -152,7 +152,7 @@ def install_to_claude(name: str = "google-calendar", standalone: bool = True, fo
     
     Args:
         name: Server name in config (default: "google-calendar")
-        standalone: Copy to ~/.mcp/google_calendar/ (True) or use current location (False)
+        standalone: Copy to ~/.mcp/google-calendar/ (True) or use current location (False)
         force: Overwrite existing entry if present
     
     Returns True if installed successfully.
@@ -173,7 +173,7 @@ def install_to_claude(name: str = "google-calendar", standalone: bool = True, fo
         mcp_dir = get_mcp_app_dir()
         src_dir = mcp_dir / "src"
         
-        print("  Copying package to ~/.mcp/google_calendar/...")
+        print("  Copying package to ~/.mcp/google-calendar/...")
         copy_package_to_mcp()
         
         venv_python = create_venv()
@@ -204,7 +204,7 @@ def uninstall_from_claude(name: str = "google-calendar", remove_files: bool = Fa
     
     Args:
         name: Server name in config
-        remove_files: Also remove ~/.mcp/google_calendar/src/ and venv/
+        remove_files: Also remove ~/.mcp/google-calendar/src/ and venv/
     
     Returns True if removed, False if not found.
     """

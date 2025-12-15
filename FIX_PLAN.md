@@ -87,7 +87,7 @@ def test_credential_permissions():
 **Validation:**
 ```bash
 # After fix, verify:
-ls -l ~/.mcp/google_calendar/
+ls -l ~/.mcp/google-calendar/
 # Should show: -rw------- (600) for all credential files
 ```
 
