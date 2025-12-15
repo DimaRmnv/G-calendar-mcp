@@ -96,13 +96,12 @@ def save_config(config: dict) -> None:
     os.chmod(config_path, 0o600)
 
 
-def add_account(name: str, email: str, timezone: Optional[str] = None) -> None:
+def add_account(name: str, email: str) -> None:
     """Add account to config."""
     config = load_config()
-    
+
     config["accounts"][name] = {
         "email": email,
-        "timezone": timezone,
         "added": datetime.now().isoformat()
     }
     

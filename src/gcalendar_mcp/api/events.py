@@ -12,6 +12,7 @@ Handles:
 
 from typing import Optional, Any
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from gcalendar_mcp.api.client import get_service
 
@@ -173,15 +174,12 @@ def create_event(
         event["start"] = {"date": start}
         event["end"] = {"date": end}
     else:
-        start_obj = {"dateTime": _ensure_rfc3339(start)}
-        end_obj = {"dateTime": _ensure_rfc3339(end)}
-        
-        if timezone:
-            start_obj["timeZone"] = timezone
-            end_obj["timeZone"] = timezone
-        
-        event["start"] = start_obj
-        event["end"] = end_obj
+        # Apply timezone offset to naive datetime strings
+        start_dt = _ensure_timezone(start, timezone)
+        end_dt = _ensure_timezone(end, timezone)
+
+        event["start"] = {"dateTime": start_dt}
+        event["end"] = {"dateTime": end_dt}
     
     # Optional fields
     if description:
@@ -277,20 +275,16 @@ def update_event(
         if is_all_day:
             patch["start"] = {"date": start}
         else:
-            start_obj = {"dateTime": _ensure_rfc3339(start)}
-            if timezone:
-                start_obj["timeZone"] = timezone
-            patch["start"] = start_obj
-    
+            start_dt = _ensure_timezone(start, timezone)
+            patch["start"] = {"dateTime": start_dt}
+
     if end is not None:
         is_all_day = _is_date_only(end)
         if is_all_day:
             patch["end"] = {"date": end}
         else:
-            end_obj = {"dateTime": _ensure_rfc3339(end)}
-            if timezone:
-                end_obj["timeZone"] = timezone
-            patch["end"] = end_obj
+            end_dt = _ensure_timezone(end, timezone)
+            patch["end"] = {"dateTime": end_dt}
     
     if attendees is not None:
         patch["attendees"] = attendees
@@ -472,7 +466,7 @@ def _is_date_only(dt_string: str) -> bool:
 def _ensure_rfc3339(dt_string: str) -> str:
     """
     Ensure datetime string is RFC3339 format.
-    
+
     Handles:
     - Already RFC3339: pass through
     - ISO without timezone: append Z (UTC)
@@ -480,13 +474,27 @@ def _ensure_rfc3339(dt_string: str) -> str:
     """
     if _is_date_only(dt_string):
         raise ValueError(f"Expected datetime, got date: {dt_string}")
-    
+
     # Already has timezone indicator
-    if dt_string.endswith("Z") or "+" in dt_string[-6:] or dt_string[-6:-5] == "-":
+    if dt_string.endswith("Z") or "+" in dt_string or dt_string[-6:-5] == "-":
         return dt_string
-    
+
     # No timezone - assume UTC
     return dt_string + "Z"
+
+
+def _ensure_timezone(dt_string: str, timezone: Optional[str]) -> str:
+    """Add timezone offset to naive datetime string."""
+    if "+" in dt_string or "Z" in dt_string:
+        return dt_string  # Already has offset
+
+    if not timezone:
+        timezone = "UTC"  # Default fallback
+
+    dt = datetime.fromisoformat(dt_string)
+    tz = ZoneInfo(timezone)
+    dt_aware = dt.replace(tzinfo=tz)
+    return dt_aware.isoformat()
 
 
 def parse_event_time(event: dict) -> tuple[str, str, bool]:

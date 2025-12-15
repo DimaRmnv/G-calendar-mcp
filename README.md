@@ -251,7 +251,7 @@ Synthesized weekly overview: total hours, busiest day, free days, conflicts.
 
 - `list_calendars`: Show all accessible calendars
 - `list_colors`: Available event colors
-- `get_settings`: User's timezone and preferences
+- `manage_settings`: Get/update settings or list accounts (action="get"|"set_timezone"|"list_accounts")
 
 ---
 

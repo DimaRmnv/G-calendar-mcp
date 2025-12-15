@@ -18,6 +18,7 @@ def batch_operations(
     calendar_id: str = "primary",
     send_updates: str = "all",
     account: Optional[str] = None,
+    timezone: Optional[str] = None,
 ) -> dict:
     """
     Execute multiple calendar operations in batch.
@@ -25,7 +26,7 @@ def batch_operations(
     Args:
         operations: List of operations, each with:
             - action: 'create', 'update', or 'delete'
-            - For create: summary, start, end, and optional fields (description, location, attendees, etc.)
+            - For create: summary, start, end, and optional fields (description, location, attendees, timezone, etc.)
             - For update: event_id and fields to update
             - For delete: event_id
         calendar_id: Calendar ID for all operations (use 'primary' for main calendar)
@@ -34,6 +35,8 @@ def batch_operations(
             - 'externalOnly': Notify only non-Google Calendar users
             - 'none': No notifications
         account: Account name (uses default if not specified)
+        timezone: Default timezone for all operations (IANA format, e.g., 'Europe/Kyiv').
+            Can be overridden per operation.
     
     Returns:
         Dictionary with:
@@ -63,7 +66,8 @@ def batch_operations(
         
         try:
             if action == "create":
-                # Extract create parameters
+                # Extract create parameters (operation timezone overrides global)
+                op_timezone = op.get("timezone") or timezone
                 result = api_create_event(
                     summary=op.get("summary", "(No title)"),
                     start=op["start"],
@@ -72,7 +76,7 @@ def batch_operations(
                     calendar_id=calendar_id,
                     description=op.get("description"),
                     location=op.get("location"),
-                    timezone=op.get("timezone"),
+                    timezone=op_timezone,
                     attendees=[{"email": e} for e in op.get("attendees", [])] if op.get("attendees") else None,
                     send_updates=send_updates,
                 )
@@ -99,9 +103,14 @@ def batch_operations(
                 }
                 
                 # Add optional fields if present
-                for field in ["summary", "start", "end", "description", "location", "timezone"]:
+                for field in ["summary", "start", "end", "description", "location"]:
                     if field in op:
                         update_kwargs[field] = op[field]
+
+                # Handle timezone: operation value overrides global
+                op_timezone = op.get("timezone") or timezone
+                if op_timezone:
+                    update_kwargs["timezone"] = op_timezone
                 
                 result = api_update_event(**update_kwargs)
                 results.append({

@@ -15,7 +15,7 @@ from gcalendar_mcp.tools.crud import (
     search_events,
     get_freebusy,
 )
-from gcalendar_mcp.tools.reference import list_calendars, list_colors, get_settings
+from gcalendar_mcp.tools.reference import list_calendars, list_colors, manage_settings
 from gcalendar_mcp.tools.attendees import manage_attendees, respond_to_event
 from gcalendar_mcp.tools.intelligence import batch_operations, find_meeting_slots, weekly_brief
 from gcalendar_mcp.utils.config import load_config
@@ -42,14 +42,18 @@ Modify: update_event (scope="single"|"all"|"following" for recurring)
 Delete: delete_event (scope="single"|"all" for recurring)
 Attendees: manage_attendees (list/add/remove/resend)
 Bulk: batch_operations (multiple create/update/delete)
-Reference: list_calendars, list_colors, get_settings
+Reference: list_calendars, list_colors, manage_settings (action="get"|"set_timezone"|"list_accounts")
 
 TIME TRACKING (if enabled):
 Management: time_tracking(operations=[...]) - batch CRUD for projects/phases/tasks/norms/exclusions/config/init
 Reports: time_tracking_report(report_type="status"|"week"|"month"|"custom", output_format="summary"|"excel")
 
 TIME: '2024-12-15T10:00:00' (timed) or '2024-12-15' (all-day). Specify timezone for cross-tz scheduling.
-ACCOUNTS: Use 'account' parameter for non-default. 'calendar_id' defaults to 'primary'."""
+
+ACCOUNTS:
+- When user references calendar by name (e.g., "personal", "work", "family"), call manage_settings(action="list_accounts") to match with configured account names.
+- Do not assume default account when user mentions specific calendar. If ambiguous, ask user to clarify.
+- 'calendar_id' defaults to 'primary'."""
 )
 
 # CRUD tools
@@ -64,7 +68,7 @@ mcp.tool(get_freebusy)
 # Reference tools
 mcp.tool(list_calendars)
 mcp.tool(list_colors)
-mcp.tool(get_settings)
+mcp.tool(manage_settings)
 
 # Attendees tools
 mcp.tool(manage_attendees)

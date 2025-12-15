@@ -172,10 +172,12 @@ def auth_add_account() -> Optional[str]:
     Returns account name on success, None on failure.
     """
     existing_names = get_account_names()
-    
+
     # Get account name
+    print_info("Choose a descriptive name that you'll use in conversations")
+    print_info("(e.g., 'work', 'personal', 'family', 'projects')")
     while True:
-        name = prompt("Account name (e.g., work, personal)")
+        name = prompt("Account name")
         
         if not name:
             print_error("Account name is required")
@@ -275,14 +277,12 @@ def auth_add_account() -> Optional[str]:
         print_error(f"Authorization failed: {e}")
         return None
     
-    # Verify and get actual email + timezone
+    # Verify and get actual email
     try:
         profile = verify_credentials(name)
         actual_email = profile.get("email")
-        timezone = profile.get("timezone")
     except Exception:
         actual_email = None
-        timezone = None
     
     # Check email match
     if actual_email and actual_email.lower() != email.lower():
@@ -311,11 +311,10 @@ def auth_add_account() -> Optional[str]:
         email = actual_email
     
     # Save account
-    add_account(name, email, timezone)
-    
+    add_account(name, email)
+
     default_marker = " (default)" if is_default(name) else ""
-    tz_info = f" [{timezone}]" if timezone else ""
-    print_success(f"Account '{name}' authorized: {email}{tz_info}{default_marker}")
+    print_success(f"Account '{name}' authorized: {email}{default_marker}")
     
     return name
 
@@ -382,10 +381,8 @@ def auth_list() -> None:
     
     for name, info in accounts.items():
         email = info.get("email", "unknown")
-        timezone = info.get("timezone", "")
         default_marker = " [default]" if is_default(name) else ""
-        tz_info = f" ({timezone})" if timezone else ""
-        
+
         # Check token status
         if check_token_valid(name):
             status = "✓"
@@ -393,8 +390,8 @@ def auth_list() -> None:
             status = "⚠ token expired"
         else:
             status = "✗ no token"
-        
-        print(f"  {status} {name}: {email}{tz_info}{default_marker}")
+
+        print(f"  {status} {name}: {email}{default_marker}")
     
     print()
 
