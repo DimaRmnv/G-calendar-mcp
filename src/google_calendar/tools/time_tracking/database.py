@@ -3,7 +3,7 @@ Database management for time tracking.
 
 SQLite database schema and operations for projects, phases, tasks, norms, and settings.
 All entities have integer id as primary key for batch operations.
-Database location: ~/.mcp/gcalendar/time_tracking.db
+Database location: ~/.mcp/google_calendar/time_tracking.db
 """
 
 import sqlite3

@@ -2,7 +2,7 @@
 Configuration management for GCalendar MCP.
 
 Handles:
-- Config directory paths (~/.mcp/gcalendar/)
+- Config directory paths (~/.mcp/google_calendar/)
 - Config file read/write
 - Account management
 - Time tracking feature toggle
@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Optional
 
 
-APP_NAME = "gcalendar"
+APP_NAME = "google_calendar"
 
 
 def get_mcp_root() -> Path:
@@ -26,38 +26,38 @@ def get_mcp_root() -> Path:
 
 
 def get_app_dir() -> Path:
-    """Get app directory: ~/.mcp/gcalendar"""
+    """Get app directory: ~/.mcp/google_calendar"""
     app_dir = get_mcp_root() / APP_NAME
     app_dir.mkdir(exist_ok=True)
     return app_dir
 
 
 def get_tokens_dir() -> Path:
-    """Get tokens directory: ~/.mcp/gcalendar/tokens"""
+    """Get tokens directory: ~/.mcp/google_calendar/tokens"""
     tokens_dir = get_app_dir() / "tokens"
     tokens_dir.mkdir(exist_ok=True)
     return tokens_dir
 
 
 def get_cache_dir() -> Path:
-    """Get cache directory: ~/.mcp/gcalendar/cache"""
+    """Get cache directory: ~/.mcp/google_calendar/cache"""
     cache_dir = get_app_dir() / "cache"
     cache_dir.mkdir(exist_ok=True)
     return cache_dir
 
 
 def get_config_path() -> Path:
-    """Get config file path: ~/.mcp/gcalendar/config.json"""
+    """Get config file path: ~/.mcp/google_calendar/config.json"""
     return get_app_dir() / "config.json"
 
 
 def get_oauth_client_path() -> Path:
-    """Get OAuth client credentials path: ~/.mcp/gcalendar/oauth_client.json"""
+    """Get OAuth client credentials path: ~/.mcp/google_calendar/oauth_client.json"""
     return get_app_dir() / "oauth_client.json"
 
 
 def get_token_path(account: str) -> Path:
-    """Get token file path for account: ~/.mcp/gcalendar/tokens/{account}.json"""
+    """Get token file path for account: ~/.mcp/google_calendar/tokens/{account}.json"""
     return get_tokens_dir() / f"{account}.json"
 
 
