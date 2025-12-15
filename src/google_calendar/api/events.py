@@ -12,7 +12,6 @@ Handles:
 
 from typing import Optional, Any
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
 
 from google_calendar.api.client import get_service
 
@@ -174,12 +173,11 @@ def create_event(
         event["start"] = {"date": start}
         event["end"] = {"date": end}
     else:
-        # Apply timezone offset to naive datetime strings
-        start_dt = _ensure_timezone(start, timezone)
-        end_dt = _ensure_timezone(end, timezone)
-
-        event["start"] = {"dateTime": start_dt}
-        event["end"] = {"dateTime": end_dt}
+        event["start"] = {"dateTime": start}
+        event["end"] = {"dateTime": end}
+        if timezone:
+            event["start"]["timeZone"] = timezone
+            event["end"]["timeZone"] = timezone
     
     # Optional fields
     if description:
@@ -275,16 +273,18 @@ def update_event(
         if is_all_day:
             patch["start"] = {"date": start}
         else:
-            start_dt = _ensure_timezone(start, timezone)
-            patch["start"] = {"dateTime": start_dt}
+            patch["start"] = {"dateTime": start}
+            if timezone:
+                patch["start"]["timeZone"] = timezone
 
     if end is not None:
         is_all_day = _is_date_only(end)
         if is_all_day:
             patch["end"] = {"date": end}
         else:
-            end_dt = _ensure_timezone(end, timezone)
-            patch["end"] = {"dateTime": end_dt}
+            patch["end"] = {"dateTime": end}
+            if timezone:
+                patch["end"]["timeZone"] = timezone
     
     if attendees is not None:
         patch["attendees"] = attendees
@@ -481,20 +481,6 @@ def _ensure_rfc3339(dt_string: str) -> str:
 
     # No timezone - assume UTC
     return dt_string + "Z"
-
-
-def _ensure_timezone(dt_string: str, timezone: Optional[str]) -> str:
-    """Add timezone offset to naive datetime string."""
-    if "+" in dt_string or "Z" in dt_string:
-        return dt_string  # Already has offset
-
-    if not timezone:
-        timezone = "UTC"  # Default fallback
-
-    dt = datetime.fromisoformat(dt_string)
-    tz = ZoneInfo(timezone)
-    dt_aware = dt.replace(tzinfo=tz)
-    return dt_aware.isoformat()
 
 
 def parse_event_time(event: dict) -> tuple[str, str, bool]:
