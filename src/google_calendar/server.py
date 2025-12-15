@@ -50,10 +50,13 @@ Reports: time_tracking_report(report_type="status"|"week"|"month"|"custom", outp
 
 TIME: '2024-12-15T10:00:00' (timed) or '2024-12-15' (all-day). Specify timezone for cross-tz scheduling.
 
-ACCOUNTS:
-- When user references calendar by name (e.g., "personal", "work", "family"), call manage_settings(action="list_accounts") to match with configured account names.
-- Do not assume default account when user mentions specific calendar. If ambiguous, ask user to clarify.
-- 'calendar_id' defaults to 'primary'."""
+ACCOUNTS vs CALENDARS:
+- ACCOUNTS (work, personal, family) = different Google accounts. Use manage_settings(action="list_accounts") to list them.
+- CALENDARS (primary, holidays, shared) = calendars within ONE account. Use list_calendars to list them.
+- When user says "personal calendar" or "work calendar", they mean ACCOUNT, not calendar_id.
+- Call manage_settings(action="list_accounts") first to match user's description with account names.
+- Do not assume default account. If ambiguous, ask user to clarify.
+- 'calendar_id' defaults to 'primary' (main calendar within the selected account)."""
 )
 
 # CRUD tools
