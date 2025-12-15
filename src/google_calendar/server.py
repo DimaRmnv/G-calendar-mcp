@@ -32,31 +32,32 @@ mcp = FastMCP(
     name="google-calendar",
     instructions="""Google Calendar integration. Multi-account support.
 
-TOOL SELECTION:
-Schedule view: list_events (period="today"|"week") or weekly_brief (stats, conflicts)
-Event details: get_event (full info, attendees, Meet link)
-Search: search_events (text match across title/description/attendees)
-Availability: get_freebusy (busy/free check) or find_meeting_slots (cross-timezone slot finder)
-Create: create_event (add_meet_link=True for video calls; see docstring for recurrence RRULE examples)
-Modify: update_event (scope="single"|"all"|"following" for recurring)
-Delete: delete_event (scope="single"|"all" for recurring)
-Attendees: manage_attendees (list/add/remove/resend)
-Bulk: batch_operations (multiple create/update/delete)
-Reference: list_calendars, list_colors, manage_settings (action="get"|"set_timezone"|"list_accounts")
-
-TIME TRACKING (if enabled):
-Management: time_tracking(operations=[...]) - batch CRUD for projects/phases/tasks/norms/exclusions/config/init
-Reports: time_tracking_report(report_type="status"|"week"|"month"|"custom", output_format="summary"|"excel")
-
-TIME: '2024-12-15T10:00:00' (timed) or '2024-12-15' (all-day). Specify timezone for cross-tz scheduling.
+CRITICAL - ACCOUNT SELECTION:
+When user mentions ANY calendar name ("личный", "personal", "рабочий", "work", "family", etc.):
+1. FIRST call manage_settings(action="list_accounts") to get available accounts
+2. Match user's description to account name
+3. Use account="<matched_name>" parameter in subsequent calls
+4. NEVER use default account when user specifies a calendar name
+Example: "в личном календаре" → list_accounts → find "personal" → account="personal"
 
 ACCOUNTS vs CALENDARS:
-- ACCOUNTS (work, personal, family) = different Google accounts. Use manage_settings(action="list_accounts") to list them.
-- CALENDARS (primary, holidays, shared) = calendars within ONE account. Use list_calendars to list them.
-- When user says "personal calendar" or "work calendar", they mean ACCOUNT, not calendar_id.
-- Call manage_settings(action="list_accounts") first to match user's description with account names.
-- Do not assume default account. If ambiguous, ask user to clarify.
-- 'calendar_id' defaults to 'primary' (main calendar within the selected account)."""
+- ACCOUNTS = different Google accounts (work, personal). Parameter: account="work"
+- CALENDARS = calendars within one account (primary, holidays). Parameter: calendar_id="primary"
+- "личный календарь" / "personal calendar" = ACCOUNT, not calendar_id
+
+TOOL SELECTION:
+Schedule: list_events (period="today"|"week") or weekly_brief
+Create: create_event (add_meet_link=True for video calls)
+Modify: update_event (scope="single"|"all"|"following" for recurring)
+Delete: delete_event (scope="single"|"all" for recurring)
+Search: search_events | Availability: get_freebusy, find_meeting_slots
+Attendees: manage_attendees | Bulk: batch_operations
+Reference: list_calendars, list_colors, manage_settings
+
+TIME TRACKING (if enabled):
+time_tracking(operations=[...]) | time_tracking_report(report_type, output_format)
+
+TIME: '2024-12-15T10:00:00' (timed) or '2024-12-15' (all-day)."""
 )
 
 # CRUD tools
