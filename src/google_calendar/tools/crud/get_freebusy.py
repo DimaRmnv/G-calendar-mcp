@@ -20,7 +20,14 @@ def get_freebusy(
 ) -> dict:
     """
     Query free/busy information for calendars.
-    
+
+    IMPORTANT - ACCOUNT SELECTION:
+    When user mentions "личный календарь", "personal", "рабочий", "work", etc.:
+    1. FIRST call manage_settings(action="list_accounts") to see available accounts
+    2. Match user's description to account name (e.g., "личный" → "personal")
+    3. Pass account="personal" (or matched name) to this function
+    Do NOT use default account when user specifies a calendar name!
+
     Args:
         time_min: Start time boundary. Preferred: '2024-01-01T00:00:00' (uses timeZone parameter or calendar timezone). Also accepts: '2024-01-01T00:00:00Z' or '2024-01-01T00:00:00-08:00'.
         time_max: End time boundary. Preferred: '2024-01-01T23:59:59' (uses timeZone parameter or calendar timezone). Also accepts: '2024-01-01T23:59:59Z' or '2024-01-01T23:59:59-08:00'.

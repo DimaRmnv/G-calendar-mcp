@@ -23,7 +23,14 @@ def delete_event(
 ) -> dict:
     """
     Delete a calendar event.
-    
+
+    IMPORTANT - ACCOUNT SELECTION:
+    When user mentions "личный календарь", "personal", "рабочий", "work", etc.:
+    1. FIRST call manage_settings(action="list_accounts") to see available accounts
+    2. Match user's description to account name (e.g., "личный" → "personal")
+    3. Pass account="personal" (or matched name) to this function
+    Do NOT use default account when user specifies a calendar name!
+
     Args:
         event_id: Event ID to delete. For recurring events, can be either:
             - Instance ID (e.g., "abc123_20250115T100000Z") for specific occurrence

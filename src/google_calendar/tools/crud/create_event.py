@@ -31,31 +31,36 @@ def create_event(
 ) -> dict:
     """
     Create a new calendar event.
-    
+
+    IMPORTANT - ACCOUNT SELECTION:
+    When user mentions "личный календарь", "personal", "рабочий", "work", etc.:
+    1. FIRST call manage_settings(action="list_accounts") to see available accounts
+    2. Match user's description to account name (e.g., "личный" → "personal")
+    3. Pass account="personal" (or matched name) to this function
+    Do NOT use default account when user specifies a calendar name!
+
     Args:
         summary: Title of the event
-        start: Event start time: '2025-01-01T10:00:00' for timed events or '2025-01-01' for all-day events. Also accepts Google Calendar API object format: {date: '2025-01-01'} or {dateTime: '2025-01-01T10:00:00', timeZone: 'America/Los_Angeles'}
-        end: Event end time: '2025-01-01T11:00:00' for timed events or '2025-01-02' for all-day events (exclusive). Also accepts Google Calendar API object format: {date: '2025-01-02'} or {dateTime: '2025-01-01T11:00:00', timeZone: 'America/Los_Angeles'}
-        calendar_id: ID of the calendar (use 'primary' for the main calendar)
+        start: Event start time: '2025-01-01T10:00:00' for timed events or '2025-01-01' for all-day events
+        end: Event end time: '2025-01-01T11:00:00' for timed events or '2025-01-02' for all-day events (exclusive)
+        account: Google account name ("work", "personal", etc.). REQUIRED when user specifies calendar. Call manage_settings(action="list_accounts") first to get available account names.
+        calendar_id: Calendar within account (use 'primary' for main calendar)
         description: Description/notes for the event
         location: Location of the event
-        timezone: Timezone as IANA Time Zone Database name (e.g., America/Los_Angeles). Takes priority over calendar's default timezone. Only used for timezone-naive datetime strings.
+        timezone: Timezone as IANA name (e.g., Asia/Bangkok). Applied to naive datetime strings.
         attendees: List of attendee email addresses to invite
-        add_meet_link: If True, automatically generate a Google Meet link for the event
-        reminders_minutes: List of reminder times in minutes before event (e.g., [10, 60] for 10min and 1hr reminders)
-        recurrence: Recurrence rules in RFC5545 RRULE format. Examples:
+        add_meet_link: If True, generate Google Meet link
+        reminders_minutes: Reminder times in minutes before event (e.g., [10, 60])
+        recurrence: RRULE format. Examples:
             - Daily for 5 days: ["RRULE:FREQ=DAILY;COUNT=5"]
             - Every weekday: ["RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"]
             - Every Monday and Wednesday: ["RRULE:FREQ=WEEKLY;BYDAY=MO,WE"]
             - Monthly on 15th: ["RRULE:FREQ=MONTHLY;BYMONTHDAY=15"]
-            - Every 2 weeks on Friday: ["RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=FR"]
-            - Until specific date: ["RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=20250331T000000Z"]
-        color_id: Color ID for the event (use list-colors to see available IDs)
-        visibility: Visibility of the event. Use 'public' for public events, 'private' for private events visible to attendees.
-        transparency: Whether the event blocks time on the calendar. 'opaque' means busy, 'transparent' means free.
-        extended_properties: Extended properties for storing application-specific data. Format: {"private": {"key": "value"}, "shared": {"key": "value"}}
-        send_updates: Whether to send notifications about the event creation. 'all' sends to all guests, 'externalOnly' to non-Google Calendar users only, 'none' sends no notifications.
-        account: Account name (uses default if not specified)
+        color_id: Color ID (use list_colors to see options)
+        visibility: 'public' or 'private'
+        transparency: 'opaque' (busy) or 'transparent' (free)
+        extended_properties: {"private": {"key": "value"}, "shared": {"key": "value"}}
+        send_updates: 'all', 'externalOnly', or 'none'
     
     Returns:
         Dictionary with:

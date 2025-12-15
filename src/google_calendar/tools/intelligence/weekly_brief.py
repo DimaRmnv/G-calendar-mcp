@@ -20,7 +20,14 @@ def weekly_brief(
 ) -> dict:
     """
     Generate a weekly schedule brief with analysis.
-    
+
+    IMPORTANT - ACCOUNT SELECTION:
+    When user mentions "личный календарь", "personal", "рабочий", "work", etc.:
+    1. FIRST call manage_settings(action="list_accounts") to see available accounts
+    2. Match user's description to account name (e.g., "личный" → "personal")
+    3. Pass account="personal" (or matched name) to this function
+    Do NOT use default account when user specifies a calendar name!
+
     Args:
         start_date: Start of week (date: '2025-01-13'). Default: current week's Monday.
         calendar_id: Calendar ID (use 'primary' for main calendar)

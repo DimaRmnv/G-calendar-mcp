@@ -26,7 +26,14 @@ def find_meeting_slots(
 ) -> dict:
     """
     Find available meeting slots across calendars and timezones.
-    
+
+    IMPORTANT - ACCOUNT SELECTION:
+    When user mentions "личный календарь", "personal", "рабочий", "work", etc.:
+    1. FIRST call manage_settings(action="list_accounts") to see available accounts
+    2. Match user's description to account name (e.g., "личный" → "personal")
+    3. Pass account="personal" (or matched name) to this function
+    Do NOT use default account when user specifies a calendar name!
+
     Args:
         duration_minutes: Required meeting duration in minutes
         date_range_start: Start of search range (date: '2025-01-15' or datetime: '2025-01-15T00:00:00')

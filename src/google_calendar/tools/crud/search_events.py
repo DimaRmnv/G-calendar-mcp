@@ -21,7 +21,14 @@ def search_events(
 ) -> dict:
     """
     Search calendar events by text query.
-    
+
+    IMPORTANT - ACCOUNT SELECTION:
+    When user mentions "личный календарь", "personal", "рабочий", "work", etc.:
+    1. FIRST call manage_settings(action="list_accounts") to see available accounts
+    2. Match user's description to account name (e.g., "личный" → "personal")
+    3. Pass account="personal" (or matched name) to this function
+    Do NOT use default account when user specifies a calendar name!
+
     Args:
         query: Search query - matches against summary, description, location, attendees, etc.
         calendar_id: Calendar ID (use 'primary' for the main calendar)
