@@ -27,11 +27,11 @@ A Model Context Protocol server that gives Claude direct access to your Google C
 ### Setup
 
 ```bash
-git clone https://github.com/dmytroromanov/gcalendar-mcp.git
-cd gcalendar-mcp
+git clone https://github.com/dmytroromanov/google-calendar-mcp.git
+cd google-calendar-mcp
 pip install -e .
-python -m gcalendar_mcp auth
-python -m gcalendar_mcp install
+python -m google_calendar auth
+python -m google_calendar install
 ```
 
 Restart Claude Desktop after installation.
@@ -42,7 +42,7 @@ Restart Claude Desktop after installation.
 2. APIs & Services → Library → Google Calendar API → Enable
 3. APIs & Services → Credentials → Create Credentials → OAuth client ID → Desktop app
 4. Download JSON file
-5. Paste JSON content when `gcalendar-mcp auth` prompts
+5. Paste JSON content when `google-calendar-mcp auth` prompts
 
 ---
 
@@ -54,10 +54,10 @@ Track project hours, billable time, and generate timesheet reports based on cale
 
 ```bash
 # Enable the feature
-python -m gcalendar_mcp time-tracking enable
+python -m google_calendar time-tracking enable
 
 # Initialize database with default projects
-python -m gcalendar_mcp time-tracking init
+python -m google_calendar time-tracking init
 
 # Restart Claude Desktop to load new tools
 ```
@@ -130,11 +130,11 @@ Customize with CRUD tools after initialization.
 ### CLI Commands
 
 ```bash
-python -m gcalendar_mcp time-tracking enable      # Enable feature
-python -m gcalendar_mcp time-tracking disable     # Disable feature
-python -m gcalendar_mcp time-tracking status      # Show status
-python -m gcalendar_mcp time-tracking init        # Create database with defaults
-python -m gcalendar_mcp time-tracking init --no-defaults  # Empty database
+python -m google_calendar time-tracking enable      # Enable feature
+python -m google_calendar time-tracking disable     # Disable feature
+python -m google_calendar time-tracking status      # Show status
+python -m google_calendar time-tracking init        # Create database with defaults
+python -m google_calendar time-tracking init --no-defaults  # Empty database
 ```
 
 ### Data Storage
@@ -258,10 +258,10 @@ Synthesized weekly overview: total hours, busiest day, free days, conflicts.
 ## Multi-Account
 
 ```bash
-python -m gcalendar_mcp auth        # → name it "work"
-python -m gcalendar_mcp auth        # → name it "personal"
-python -m gcalendar_mcp auth --list
-python -m gcalendar_mcp auth --default work
+python -m google_calendar auth        # → name it "work"
+python -m google_calendar auth        # → name it "personal"
+python -m google_calendar auth --list
+python -m google_calendar auth --default work
 ```
 
 Specify `account` parameter when needed:
@@ -276,25 +276,25 @@ Specify `account` parameter when needed:
 
 ```bash
 # Account management
-python -m gcalendar_mcp auth              # Add account
-python -m gcalendar_mcp auth --list       # Show accounts
-python -m gcalendar_mcp auth --default X  # Set default
-python -m gcalendar_mcp auth --remove X   # Remove account
+python -m google_calendar auth              # Add account
+python -m google_calendar auth --list       # Show accounts
+python -m google_calendar auth --default X  # Set default
+python -m google_calendar auth --remove X   # Remove account
 
 # Installation
-python -m gcalendar_mcp install           # Install to Claude Desktop
-python -m gcalendar_mcp install --force   # Reinstall
-python -m gcalendar_mcp install --dev     # Dev mode
-python -m gcalendar_mcp install --remove  # Uninstall
+python -m google_calendar install           # Install to Claude Desktop
+python -m google_calendar install --force   # Reinstall
+python -m google_calendar install --dev     # Dev mode
+python -m google_calendar install --remove  # Uninstall
 
 # Time tracking
-python -m gcalendar_mcp time-tracking enable
-python -m gcalendar_mcp time-tracking disable
-python -m gcalendar_mcp time-tracking status
-python -m gcalendar_mcp time-tracking init
+python -m google_calendar time-tracking enable
+python -m google_calendar time-tracking disable
+python -m google_calendar time-tracking status
+python -m google_calendar time-tracking init
 
 # Debug
-python -m gcalendar_mcp serve             # Run server directly
+python -m google_calendar serve             # Run server directly
 ```
 
 ---
@@ -322,16 +322,16 @@ python -m gcalendar_mcp serve             # Run server directly
 Enable Calendar API in Google Cloud Console.
 
 **Server not appearing in Claude**
-1. Check accounts: `python -m gcalendar_mcp auth --list`
+1. Check accounts: `python -m google_calendar auth --list`
 2. Verify config: `cat ~/Library/Application\ Support/Claude/claude_desktop_config.json`
 3. Restart Claude Desktop
 
 **Time tracking tools not showing**
-1. Enable: `python -m gcalendar_mcp time-tracking enable`
+1. Enable: `python -m google_calendar time-tracking enable`
 2. Restart Claude Desktop
 
 **Token expired**
-Re-run `python -m gcalendar_mcp auth` with same account name.
+Re-run `python -m google_calendar auth` with same account name.
 
 ---
 

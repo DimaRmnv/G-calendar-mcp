@@ -28,9 +28,9 @@
 OAuth credentials and tokens written with default permissions (0644), readable by all users.
 
 **Files to Fix:**
-- `src/gcalendar_mcp/utils/config.py:186-192` - `save_oauth_client()`
-- `src/gcalendar_mcp/utils/config.py:81-87` - `save_config()`
-- `src/gcalendar_mcp/api/client.py:72-75` - `save_credentials()`
+- `src/google_calendar/utils/config.py:186-192` - `save_oauth_client()`
+- `src/google_calendar/utils/config.py:81-87` - `save_config()`
+- `src/google_calendar/api/client.py:72-75` - `save_credentials()`
 
 **Implementation:**
 
@@ -103,7 +103,7 @@ ls -l ~/.mcp/gcalendar/
 Token refresh exceptions swallowed without logging, no audit trail.
 
 **File to Fix:**
-- `src/gcalendar_mcp/api/client.py:57-64`
+- `src/google_calendar/api/client.py:57-64`
 
 **Implementation:**
 
@@ -170,13 +170,13 @@ No protection against quota exhaustion. Google Calendar API limits:
 - 10 queries/second/user
 
 **Files to Fix:**
-- `src/gcalendar_mcp/api/client.py` - Add rate limiter
-- `src/gcalendar_mcp/tools/intelligence/batch_operations.py:17` - Add batch size limit
+- `src/google_calendar/api/client.py` - Add rate limiter
+- `src/google_calendar/tools/intelligence/batch_operations.py:17` - Add batch size limit
 
 **Implementation:**
 
 ```python
-# src/gcalendar_mcp/utils/rate_limiter.py
+# src/google_calendar/utils/rate_limiter.py
 
 from functools import wraps
 from time import time, sleep
@@ -246,7 +246,7 @@ def api_list_events(calendar_id: str = "primary", ..., account: Optional[str] = 
 **Batch Size Limit:**
 
 ```python
-# src/gcalendar_mcp/tools/intelligence/batch_operations.py
+# src/google_calendar/tools/intelligence/batch_operations.py
 
 MAX_BATCH_SIZE = 100  # Reasonable limit for batch operations
 
@@ -337,7 +337,7 @@ def mock_credentials():
 @pytest.fixture
 def mock_service():
     """Mock Google Calendar service."""
-    with patch('gcalendar_mcp.api.client.get_service') as mock:
+    with patch('google_calendar.api.client.get_service') as mock:
         service = MagicMock()
         mock.return_value = service
         yield service
@@ -362,7 +362,7 @@ def sample_event():
 **tests/test_api/test_events.py:**
 ```python
 import pytest
-from gcalendar_mcp.api.events import format_event_summary, _is_date_only, _ensure_rfc3339
+from google_calendar.api.events import format_event_summary, _is_date_only, _ensure_rfc3339
 
 def test_is_date_only():
     """Test date-only string detection."""
@@ -397,7 +397,7 @@ def test_format_event_summary(sample_event):
 **tests/test_tools/test_create_event.py:**
 ```python
 import pytest
-from gcalendar_mcp.tools.crud.create_event import create_event
+from google_calendar.tools.crud.create_event import create_event
 
 def test_create_event_basic(mock_service, sample_event):
     """Test basic event creation."""
@@ -416,7 +416,7 @@ def test_create_event_basic(mock_service, sample_event):
 
 **Run tests:**
 ```bash
-pytest tests/ -v --cov=src/gcalendar_mcp --cov-report=html
+pytest tests/ -v --cov=src/google_calendar --cov-report=html
 ```
 
 ---
@@ -431,7 +431,7 @@ pytest tests/ -v --cov=src/gcalendar_mcp --cov-report=html
 TODO comment at `update_event.py:123` - "following" scope partially implemented.
 
 **File to Fix:**
-- `src/gcalendar_mcp/tools/crud/update_event.py:84-141`
+- `src/google_calendar/tools/crud/update_event.py:84-141`
 
 **Current State:**
 ```python
@@ -599,12 +599,12 @@ def test_update_following_scope(mock_service):
 **Implementation:**
 
 ```python
-# src/gcalendar_mcp/utils/logging.py
+# src/google_calendar/utils/logging.py
 
 import logging
 import logging.handlers
 from pathlib import Path
-from gcalendar_mcp.utils.config import get_app_dir
+from google_calendar.utils.config import get_app_dir
 
 def setup_logging(level: str = "INFO") -> None:
     """Configure structured logging."""
@@ -612,7 +612,7 @@ def setup_logging(level: str = "INFO") -> None:
     log_dir.mkdir(exist_ok=True)
 
     # Main application log
-    app_log = log_dir / "gcalendar_mcp.log"
+    app_log = log_dir / "google_calendar.log"
 
     # Rotating file handler (10MB, 5 backups)
     file_handler = logging.handlers.RotatingFileHandler(
@@ -650,19 +650,19 @@ def setup_logging(level: str = "INFO") -> None:
     file_handler.addFilter(SensitiveDataFilter())
 
     # Configure root logger
-    root_logger = logging.getLogger('gcalendar_mcp')
+    root_logger = logging.getLogger('google_calendar')
     root_logger.setLevel(getattr(logging, level.upper()))
     root_logger.addHandler(file_handler)
 
     # Configure audit logger
-    audit_logger = logging.getLogger('gcalendar_mcp.audit')
+    audit_logger = logging.getLogger('google_calendar.audit')
     audit_logger.addHandler(audit_handler)
     audit_logger.setLevel(logging.INFO)
 
 # Helper functions
 def log_api_call(operation: str, account: str, **kwargs):
     """Log API operations."""
-    logger = logging.getLogger('gcalendar_mcp.api')
+    logger = logging.getLogger('google_calendar.api')
     logger.info(f"API call: {operation}", extra={
         "account": account,
         **kwargs
@@ -670,7 +670,7 @@ def log_api_call(operation: str, account: str, **kwargs):
 
 def log_auth_event(event_type: str, account: str, success: bool, **kwargs):
     """Log authentication events to audit log."""
-    audit_logger = logging.getLogger('gcalendar_mcp.audit')
+    audit_logger = logging.getLogger('google_calendar.audit')
 
     level = logging.INFO if success else logging.WARNING
     audit_logger.log(level, f"AUTH_{event_type}", extra={
@@ -684,21 +684,21 @@ def log_auth_event(event_type: str, account: str, success: bool, **kwargs):
 
 ```python
 # In server.py
-from gcalendar_mcp.utils.logging import setup_logging
+from google_calendar.utils.logging import setup_logging
 
 def main():
     setup_logging(level="INFO")
     # ... rest of main ...
 
 # In api/client.py
-from gcalendar_mcp.utils.logging import log_api_call
+from google_calendar.utils.logging import log_api_call
 
 def api_list_events(...):
     log_api_call("list_events", account=account, calendar_id=calendar_id)
     # ... rest of implementation ...
 
 # In cli/auth.py
-from gcalendar_mcp.utils.logging import log_auth_event
+from google_calendar.utils.logging import log_auth_event
 
 def auth_add_account(...):
     try:
@@ -718,7 +718,7 @@ def auth_add_account(...):
 **Implementation:**
 
 ```python
-# src/gcalendar_mcp/utils/validation.py
+# src/google_calendar/utils/validation.py
 
 import re
 from typing import Union
@@ -756,7 +756,7 @@ def validate_email(email: str) -> tuple[bool, Union[str, None]]:
     return True, None
 
 # Use in auth.py
-from gcalendar_mcp.utils.validation import validate_email
+from google_calendar.utils.validation import validate_email
 
 def auth_add_account(...):
     email = prompt("Email address").strip()
@@ -777,7 +777,7 @@ def auth_add_account(...):
 **Implementation:**
 
 ```python
-# src/gcalendar_mcp/utils/validation.py
+# src/google_calendar/utils/validation.py
 
 # Field length limits (based on Google Calendar API)
 MAX_SUMMARY_LENGTH = 1024
@@ -946,7 +946,7 @@ jobs:
 
     - name: Run tests
       run: |
-        pytest tests/ -v --cov=src/gcalendar_mcp --cov-report=xml --cov-report=term
+        pytest tests/ -v --cov=src/google_calendar --cov-report=xml --cov-report=term
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3
@@ -983,7 +983,7 @@ jobs:
 **Implementation:**
 
 ```python
-# src/gcalendar_mcp/utils/preferences.py
+# src/google_calendar/utils/preferences.py
 
 from pathlib import Path
 import json
@@ -1061,7 +1061,7 @@ def create_event(..., timezone: Optional[str] = None, ...):
 **Implementation:**
 
 ```python
-# src/gcalendar_mcp/cli/quickstart.py
+# src/google_calendar/cli/quickstart.py
 
 import webbrowser
 from pathlib import Path
@@ -1147,9 +1147,9 @@ Full instructions: https://github.com/YOUR_REPO/blob/main/docs/SETUP.md
         print("\nManual installation instructions:")
         print("  Add to Claude Desktop config.json:")
         print(f"""
-  "gcalendar-mcp": {{
+  "google-calendar-mcp": {{
     "command": "python",
-    "args": ["-m", "gcalendar_mcp"]
+    "args": ["-m", "google_calendar"]
   }}
         """)
 
@@ -1171,8 +1171,8 @@ if __name__ == "__main__":
 ## Quick Start (< 5 minutes)
 
 ```bash
-pip install gcalendar-mcp
-gcalendar-mcp --quickstart
+pip install google-calendar-mcp
+google-calendar-mcp --quickstart
 ```
 
 The wizard will guide you through:
@@ -1211,7 +1211,7 @@ The wizard will guide you through:
 **Implementation:**
 
 ```python
-# src/gcalendar_mcp/utils/time_tracking.py
+# src/google_calendar/utils/time_tracking.py
 
 from typing import Optional
 

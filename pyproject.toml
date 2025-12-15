@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "gcalendar-mcp"
+name = "google-calendar-mcp"
 version = "0.1.0"
 description = "Google Calendar MCP server for Claude Desktop"
 readme = "README.md"
@@ -39,17 +39,17 @@ dev = [
 ]
 
 [project.scripts]
-gcalendar-mcp = "gcalendar_mcp.__main__:main"
+google-calendar-mcp = "google_calendar.__main__:main"
 
 [project.urls]
-Homepage = "https://github.com/dmytroromanov/gcalendar-mcp"
-Repository = "https://github.com/dmytroromanov/gcalendar-mcp"
+Homepage = "https://github.com/DimaRmnv/G-calendar-mcp"
+Repository = "https://github.com/DimaRmnv/G-calendar-mcp"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/gcalendar_mcp"]
+packages = ["src/google_calendar"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/gcalendar_mcp"]
+include = ["src/google_calendar"]
 
 [tool.hatch.build]
 sources = ["src"]

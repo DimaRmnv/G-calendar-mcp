@@ -75,7 +75,7 @@ The Google Calendar MCP server is a **well-architected, technically sound projec
 ### 🔴 CRITICAL Issues
 
 #### 1. Credential Files Lack Proper Permissions
-**Location:** `src/gcalendar_mcp/utils/config.py:186-192`
+**Location:** `src/google_calendar/utils/config.py:186-192`
 **Risk Level:** CRITICAL
 
 OAuth credentials and tokens written with default permissions (0644), allowing any user on the system to read sensitive authentication data.
@@ -91,7 +91,7 @@ OAuth credentials and tokens written with default permissions (0644), allowing a
 - `~/.mcp/gcalendar/config.json`
 
 #### 2. Token Refresh Failures Silently Swallowed
-**Location:** `src/gcalendar_mcp/api/client.py:57-64`
+**Location:** `src/google_calendar/api/client.py:57-64`
 **Risk Level:** CRITICAL
 
 Token refresh errors caught without logging, making credential compromise undetectable.
@@ -102,7 +102,7 @@ Token refresh errors caught without logging, making credential compromise undete
 - No distinction between network errors and invalid tokens
 
 #### 3. Insufficient Email Validation
-**Location:** `src/gcalendar_mcp/cli/auth.py:218-222`
+**Location:** `src/google_calendar/cli/auth.py:218-222`
 **Risk Level:** HIGH
 
 Email validation only checks for "@" character, allowing malformed input.
