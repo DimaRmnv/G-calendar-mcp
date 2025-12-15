@@ -47,6 +47,8 @@ def update_event(
     3. Pass account="personal" (or matched name) to this function
     Do NOT use default account when user specifies a calendar name!
 
+    NOTE: If skill 'calendar-manager' is available, follow its guidelines for event formatting (summary, description, etc.).
+
     Args:
         event_id: Event ID to update. For recurring events, can be either:
             - Instance ID (e.g., "abc123_20250115T100000Z") for specific occurrence

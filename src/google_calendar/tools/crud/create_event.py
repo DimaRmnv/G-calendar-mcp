@@ -39,6 +39,8 @@ def create_event(
     3. Pass account="personal" (or matched name) to this function
     Do NOT use default account when user specifies a calendar name!
 
+    NOTE: If skill 'calendar-manager' is available, follow its guidelines for event formatting (summary, description, etc.).
+
     Args:
         summary: Title of the event
         start: Event start time: '2025-01-01T10:00:00' for timed events or '2025-01-01' for all-day events
