@@ -86,9 +86,9 @@ OAuth credentials and tokens written with default permissions (0644), allowing a
 - Unauthorized calendar access
 
 **Affected Files:**
-- `~/.mcp/gcalendar/oauth_client.json`
-- `~/.mcp/gcalendar/tokens/*.json`
-- `~/.mcp/gcalendar/config.json`
+- `~/.mcp/google_calendar/oauth_client.json`
+- `~/.mcp/google_calendar/tokens/*.json`
+- `~/.mcp/google_calendar/config.json`
 
 #### 2. Token Refresh Failures Silently Swallowed
 **Location:** `src/google_calendar/api/client.py:57-64`

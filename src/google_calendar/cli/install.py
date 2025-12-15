@@ -25,7 +25,7 @@ def get_claude_config_path() -> Path:
 
 def get_mcp_app_dir() -> Path:
     """Get ~/.mcp/google_calendar/ directory."""
-    return Path.home() / ".mcp" / "gcalendar"
+    return Path.home() / ".mcp" / "google_calendar"
 
 
 def get_installed_venv_python() -> Path:
@@ -151,7 +151,7 @@ def install_to_claude(name: str = "google-calendar", standalone: bool = True, fo
     Merges into existing config, preserving all other servers.
     
     Args:
-        name: Server name in config (default: "gcalendar")
+        name: Server name in config (default: "google-calendar")
         standalone: Copy to ~/.mcp/google_calendar/ (True) or use current location (False)
         force: Overwrite existing entry if present
     
