@@ -47,14 +47,16 @@ def get_package_src_dir() -> Path:
 def load_claude_config() -> dict:
     """Load existing Claude Desktop config or return empty structure."""
     config_path = get_claude_config_path()
-    
-    if config_path.exists():
-        try:
-            return json.loads(config_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, IOError):
-            return {}
-    
-    return {}
+
+    if not config_path.exists():
+        return {}
+
+    try:
+        return json.loads(config_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in {config_path}: {e}")
+    except IOError as e:
+        raise ValueError(f"Cannot read {config_path}: {e}")
 
 
 def save_claude_config(config: dict) -> None:
