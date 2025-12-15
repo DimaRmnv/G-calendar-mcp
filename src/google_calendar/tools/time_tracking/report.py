@@ -228,7 +228,6 @@ async def time_tracking_report(
     report_type: str = "status",
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
-    output_format: str = "summary",
     account: Optional[str] = None,
 ) -> dict:
     """
@@ -238,12 +237,11 @@ async def time_tracking_report(
         report_type: 'status' (quick WTD/MTD), 'week', 'month', or 'custom'
         start_date: Start date for custom (YYYY-MM-DD)
         end_date: End date for custom (YYYY-MM-DD)
-        output_format: 'summary' or 'excel'
         account: Google account name
 
     Returns:
         For status: week/month summaries with on-track percentages
-        For reports: summary + error_records + file info (if excel)
+        For reports: summary + error_records + Excel file path (auto-saved)
     """
     ensure_database()
 
@@ -391,18 +389,19 @@ async def time_tracking_report(
     
     error_records = _get_error_records(entries)
     
-    result = {
+    # Always generate Excel
+    try:
+        file_path, file_name = _generate_excel(entries, report_type)
+    except Exception as e:
+        return {
+            "summary": summary,
+            "error_records": error_records,
+            "excel_error": str(e),
+        }
+
+    return {
         "summary": summary,
         "error_records": error_records,
+        "file_path": str(file_path),
+        "file_name": file_name,
     }
-
-    # Generate Excel if requested
-    if output_format == "excel":
-        try:
-            file_path, file_name = _generate_excel(entries, report_type)
-            result["file_path"] = str(file_path)
-            result["file_name"] = file_name
-        except Exception as e:
-            result["excel_error"] = str(e)
-
-    return result
