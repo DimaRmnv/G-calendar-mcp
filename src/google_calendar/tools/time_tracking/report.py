@@ -92,7 +92,18 @@ def _calculate_summary(
     
     # Non-billable
     non_billable_hours = sum(e.duration_hours for e in valid if not e.is_billable)
-    
+
+    # By project breakdown (valid entries only)
+    by_project = {}
+    for e in valid:
+        if e.project_code:
+            if e.project_code not in by_project:
+                by_project[e.project_code] = {
+                    "hours": 0.0,
+                    "billable": e.is_billable,
+                }
+            by_project[e.project_code]["hours"] += e.duration_hours
+
     # Error hours
     error_hours = sum(e.duration_hours for e in errors)
     total_reported = total_hours + error_hours
@@ -103,7 +114,12 @@ def _calculate_summary(
     
     # Elapsed target for billable (proportional to elapsed time)
     elapsed_billable_target = hours_elapsed * billable_target_hours / norm_hours if norm_hours > 0 else 0
-    
+
+    # Calculate percentages and round hours for by_project
+    for code, data in by_project.items():
+        data["hours"] = round(data["hours"], 2)
+        data["pct_of_total"] = safe_pct(data["hours"], total_hours)
+
     return {
         "period": {
             "type": period_type,
@@ -138,6 +154,7 @@ def _calculate_summary(
             "count": len(errors),
             "pct_of_total_reported": safe_pct(error_hours, total_reported),
         },
+        "by_project": by_project,
     }
 
 
