@@ -364,7 +364,9 @@ def contact_add(
              job_title, department, country, city, timezone,
              preferred_channel, preferred_language, notes)
         )
-        return contact_get(id=cursor.lastrowid)
+        new_id = cursor.lastrowid
+    # Fetch after commit
+    return contact_get(id=new_id)
 
 
 def contact_get(
@@ -490,9 +492,11 @@ def contact_update(id: int, **kwargs) -> Optional[dict]:
             f"UPDATE contacts SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             values
         )
-        if cursor.rowcount == 0:
-            return None
-        return contact_get(id=id)
+        updated = cursor.rowcount > 0
+    # Fetch after commit
+    if not updated:
+        return None
+    return contact_get(id=id)
 
 
 def contact_delete(id: int) -> bool:
@@ -641,7 +645,8 @@ def channel_update(id: int, **kwargs) -> Optional[dict]:
         values = list(updates.values()) + [id]
         
         cursor.execute(f"UPDATE contact_channels SET {set_clause} WHERE id = ?", values)
-        return channel_get(id)
+    # Fetch after commit
+    return channel_get(id)
 
 
 def channel_delete(id: int) -> bool:
@@ -695,7 +700,9 @@ def assignment_add(
             """,
             (contact_id, project_id, role_code.upper(), start_date, end_date, workdays_allocated, notes)
         )
-        return assignment_get(cursor.lastrowid)
+        new_id = cursor.lastrowid
+    # Fetch after commit
+    return assignment_get(new_id)
 
 
 def assignment_get(id: int) -> Optional[dict]:
@@ -771,9 +778,11 @@ def assignment_update(id: int, **kwargs) -> Optional[dict]:
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(f"UPDATE contact_projects SET {set_clause} WHERE id = ?", values)
-        if cursor.rowcount == 0:
-            return None
-        return assignment_get(id)
+        updated = cursor.rowcount > 0
+    # Fetch after commit
+    if not updated:
+        return None
+    return assignment_get(id)
 
 
 def assignment_delete(id: int) -> bool:

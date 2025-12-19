@@ -5,8 +5,20 @@ Tests for contacts database module.
 import pytest
 import tempfile
 import sqlite3
+import importlib
 from pathlib import Path
 from unittest.mock import patch
+
+
+@pytest.fixture(autouse=True)
+def reset_module():
+    """Reset the contacts module before each test to avoid caching issues."""
+    # Clear cached imports
+    import sys
+    modules_to_remove = [k for k in sys.modules.keys() if 'google_calendar.tools.contacts' in k]
+    for mod in modules_to_remove:
+        del sys.modules[mod]
+    yield
 
 
 @pytest.fixture
@@ -15,23 +27,21 @@ def temp_db():
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "time_tracking.db"
         
-        # Patch get_app_dir before importing
-        with patch('google_calendar.tools.contacts.database.get_app_dir', return_value=Path(tmpdir)):
-            # Create database with projects table (required for FK)
-            conn = sqlite3.connect(db_path)
-            conn.execute("PRAGMA foreign_keys = ON")
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS projects (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    code TEXT NOT NULL,
-                    description TEXT NOT NULL
-                )
-            """)
-            conn.execute("INSERT INTO projects (code, description) VALUES ('TEST', 'Test Project')")
-            conn.commit()
-            conn.close()
-            
-            yield Path(tmpdir)
+        # Create database with projects table (required for FK)
+        conn = sqlite3.connect(db_path)
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS projects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT NOT NULL,
+                description TEXT NOT NULL
+            )
+        """)
+        conn.execute("INSERT INTO projects (code, description) VALUES ('TEST', 'Test Project')")
+        conn.commit()
+        conn.close()
+        
+        yield Path(tmpdir)
 
 
 class TestContactsSchema:
@@ -90,6 +100,7 @@ class TestContactsCRUD:
                 preferred_channel="telegram"
             )
             
+            assert contact is not None
             assert contact['id'] is not None
             assert contact['display_name'] == "Altynbek Sydykov"
             assert contact['organization'] == "Aiyl Bank"
@@ -148,6 +159,8 @@ class TestContactsCRUD:
             init_contacts_schema()
             
             contact = contact_add(first_name="Test", last_name="User")
+            assert contact is not None
+            
             updated = contact_update(contact['id'], job_title="Manager", country="Ukraine")
             
             assert updated['job_title'] == "Manager"
@@ -161,6 +174,8 @@ class TestContactsCRUD:
             init_contacts_schema()
             
             contact = contact_add(first_name="Test", last_name="User")
+            assert contact is not None
+            
             assert contact_delete(contact['id'])
             assert contact_get(id=contact['id']) is None
 
@@ -175,6 +190,7 @@ class TestChannelsCRUD:
             )
             init_contacts_schema()
             contact = contact_add(first_name="Test", last_name="User")
+            assert contact is not None
             
             channel = channel_add(
                 contact_id=contact['id'],
@@ -197,6 +213,7 @@ class TestChannelsCRUD:
             )
             init_contacts_schema()
             contact = contact_add(first_name="Test", last_name="User")
+            assert contact is not None
             
             channel_add(
                 contact_id=contact['id'],
@@ -224,6 +241,7 @@ class TestChannelsCRUD:
             )
             init_contacts_schema()
             contact = contact_add(first_name="Test", last_name="User")
+            assert contact is not None
             
             channel = channel_add(
                 contact_id=contact['id'],
@@ -240,6 +258,7 @@ class TestChannelsCRUD:
             )
             init_contacts_schema()
             contact = contact_add(first_name="Test", last_name="User")
+            assert contact is not None
             
             channel_add(
                 contact_id=contact['id'],
@@ -263,6 +282,7 @@ class TestAssignmentsCRUD:
             )
             init_contacts_schema()
             contact = contact_add(first_name="Test", last_name="Expert")
+            assert contact is not None
             
             assignment = assignment_add(
                 contact_id=contact['id'],
@@ -285,6 +305,7 @@ class TestAssignmentsCRUD:
             )
             init_contacts_schema()
             contact = contact_add(first_name="Test", last_name="Expert")
+            assert contact is not None
             
             with pytest.raises(ValueError, match="Invalid role_code"):
                 assignment_add(
@@ -302,6 +323,7 @@ class TestAssignmentsCRUD:
             
             c1 = contact_add(first_name="Team", last_name="Leader", organization="BFC")
             c2 = contact_add(first_name="Key", last_name="Expert", organization="BFC")
+            assert c1 is not None and c2 is not None
             
             assignment_add(contact_id=c1['id'], project_id=1, role_code="TL")
             assignment_add(contact_id=c2['id'], project_id=1, role_code="KE")
@@ -323,7 +345,7 @@ class TestManageTool:
             with patch('google_calendar.tools.contacts.manage.ensure_contacts_schema'):
                 with patch('google_calendar.tools.contacts.manage.contacts_tables_exist', return_value=False):
                     with patch('google_calendar.tools.contacts.manage.init_contacts_schema'):
-                        from google_calendar.tools.contacts.manage import contacts, _init_contacts
+                        from google_calendar.tools.contacts.manage import _init_contacts
                         
                         result = _init_contacts(force_reset=False)
                         assert result['status'] == 'created'
@@ -343,8 +365,7 @@ class TestManageTool:
             ]))
             
             assert result['summary']['total'] == 2
-            # Status should work, contact_add might work
-            assert result['summary']['errors'] <= 1
+            assert result['summary']['success'] == 2
     
     def test_error_handling(self, temp_db):
         import asyncio
