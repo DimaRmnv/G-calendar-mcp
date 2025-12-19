@@ -27,6 +27,12 @@ def _is_time_tracking_enabled() -> bool:
     return config.get("time_tracking", {}).get("enabled", False)
 
 
+def _is_contacts_enabled() -> bool:
+    """Check if contacts is enabled in config."""
+    config = load_config()
+    return config.get("contacts", {}).get("enabled", False)
+
+
 # Create server
 mcp = FastMCP(
     name="google-calendar",
@@ -91,6 +97,12 @@ if _is_time_tracking_enabled():
 
     mcp.tool(time_tracking)
     mcp.tool(time_tracking_report)
+
+# Contacts tools (conditional) - extends time_tracking.db with contacts management
+if _is_contacts_enabled():
+    from google_calendar.tools.contacts import contacts
+
+    mcp.tool(contacts)
 
 
 def serve():

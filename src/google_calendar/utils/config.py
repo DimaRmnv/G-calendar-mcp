@@ -240,3 +240,31 @@ def disable_time_tracking() -> None:
         config["time_tracking"] = {}
     config["time_tracking"]["enabled"] = False
     save_config(config)
+
+
+# =============================================================================
+# Contacts Configuration
+# =============================================================================
+
+def is_contacts_enabled() -> bool:
+    """Check if contacts feature is enabled."""
+    config = load_config()
+    return config.get("contacts", {}).get("enabled", False)
+
+
+def enable_contacts() -> None:
+    """Enable contacts feature."""
+    config = load_config()
+    if "contacts" not in config:
+        config["contacts"] = {}
+    config["contacts"]["enabled"] = True
+    save_config(config)
+
+
+def disable_contacts() -> None:
+    """Disable contacts feature."""
+    config = load_config()
+    if "contacts" not in config:
+        config["contacts"] = {}
+    config["contacts"]["enabled"] = False
+    save_config(config)
