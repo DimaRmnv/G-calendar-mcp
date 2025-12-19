@@ -15,6 +15,11 @@ from google_calendar.tools.contacts.database import (
     role_list, role_get,
     get_project_team, get_contact_projects,
 )
+from google_calendar.tools.contacts.lookup import (
+    resolve_contact,
+    resolve_multiple,
+    get_preferred_channel,
+)
 
 
 def _init_contacts(force_reset: bool = False) -> dict:
@@ -87,7 +92,9 @@ OPERATIONS = {
     )},
     "contact_update": lambda p: contact_update(p["id"], **{k: v for k, v in p.items() if k != "id"}),
     "contact_delete": lambda p: {"deleted": contact_delete(id=p["id"])},
-    "contact_search": lambda p: {"contacts": contact_search(p["query"], p.get("limit", 20))},
+    "contact_search": lambda p: {"contacts": contact_search(
+        p["query"], limit=p.get("limit", 20), threshold=p.get("threshold", 60)
+    )},
     "contact_activate": lambda p: contact_update(id=p["id"], is_active=True),
     "contact_deactivate": lambda p: contact_update(id=p["id"], is_active=False),
 
@@ -123,6 +130,21 @@ OPERATIONS = {
     "project_team": lambda p: {"team": get_project_team(project_id=p["project_id"])},
     "contact_projects": lambda p: {"projects": get_contact_projects(contact_id=p["contact_id"])},
 
+    # Lookup/resolve operations
+    "contact_resolve": lambda p: resolve_contact(
+        identifier=p["identifier"],
+        context=p.get("context")
+    ),
+    "contact_resolve_multiple": lambda p: resolve_multiple(
+        identifiers=p["identifiers"],
+        context=p.get("context")
+    ),
+    "contact_preferred_channel": lambda p: get_preferred_channel(
+        contact=p["contact"],
+        channel_type=p.get("channel_type"),
+        for_purpose=p.get("for_purpose")
+    ),
+
     "init": lambda p: _init_contacts(force_reset=p.get("force_reset", False)),
     "status": lambda p: _get_status(),
 }
@@ -143,7 +165,7 @@ async def contacts(operations: list[dict]) -> dict:
             contact_list: organization?, country?, project_id?, active_only?
             contact_update: id + fields to update
             contact_delete: id
-            contact_search: query, limit?
+            contact_search: query, limit?, threshold? (fuzzy matching score 0-100, default 60)
 
         Channels:
             channel_add: contact_id, channel_type, channel_value, is_primary?
@@ -160,6 +182,15 @@ async def contacts(operations: list[dict]) -> dict:
 
         Roles: role_list, role_get
         Views: project_team, contact_projects
+        
+        Lookup (for mcp-orchestration):
+            contact_resolve: identifier, context? (project_id, organization, role_code)
+                → Returns full contact with channels and projects
+            contact_resolve_multiple: identifiers[], context?
+                → Batch resolve with deduplication
+            contact_preferred_channel: contact, channel_type?, for_purpose?
+                → Get best channel for contacting
+        
         System: init, status
 
     Valid values:

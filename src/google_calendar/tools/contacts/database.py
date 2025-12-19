@@ -11,6 +11,13 @@ from pathlib import Path
 from typing import Optional
 from contextlib import contextmanager
 
+# Optional fuzzy search - fallback to LIKE if not installed
+try:
+    from rapidfuzz import fuzz
+    FUZZY_AVAILABLE = True
+except ImportError:
+    FUZZY_AVAILABLE = False
+
 from google_calendar.utils.config import get_app_dir
 
 
@@ -507,27 +514,210 @@ def contact_delete(id: int) -> bool:
         return cursor.rowcount > 0
 
 
-def contact_search(query: str, limit: int = 20) -> list[dict]:
-    """Full-text search across contact fields and channels."""
+def _contact_search_like(query: str, limit: int = 20) -> list[dict]:
+    """
+    Fallback LIKE-based search when rapidfuzz not available.
+    
+    Searches: contact fields, channels, and project assignments.
+    """
+    # Strip @ for telegram username search
+    query = query.lstrip('@')
+    
     with get_connection() as conn:
         cursor = conn.cursor()
         search_pattern = f"%{query}%"
         
         cursor.execute(
             """
-            SELECT DISTINCT cf.* FROM v_contacts_full cf
+            SELECT 
+                cf.*,
+                GROUP_CONCAT(DISTINCT p.code) as projects
+            FROM v_contacts_full cf
             LEFT JOIN contact_channels cc ON cf.id = cc.contact_id
-            WHERE cf.display_name LIKE ?
-               OR cf.organization LIKE ?
-               OR cf.job_title LIKE ?
-               OR cf.notes LIKE ?
-               OR cc.channel_value LIKE ?
+            LEFT JOIN contact_projects cp ON cf.id = cp.contact_id AND cp.is_active = 1
+            LEFT JOIN projects p ON cp.project_id = p.id AND p.is_active = 1
+            WHERE cf.display_name LIKE ? COLLATE NOCASE
+               OR cf.first_name LIKE ? COLLATE NOCASE
+               OR cf.last_name LIKE ? COLLATE NOCASE
+               OR cf.organization LIKE ? COLLATE NOCASE
+               OR cf.country LIKE ? COLLATE NOCASE
+               OR cf.job_title LIKE ? COLLATE NOCASE
+               OR cc.channel_value LIKE ? COLLATE NOCASE
+               OR p.code LIKE ? COLLATE NOCASE
+               OR p.description LIKE ? COLLATE NOCASE
+            GROUP BY cf.id
             ORDER BY cf.display_name
             LIMIT ?
             """,
-            (search_pattern, search_pattern, search_pattern, search_pattern, search_pattern, limit)
+            (search_pattern,) * 9 + (limit,)
         )
-        return [dict(row) for row in cursor.fetchall()]
+        results = []
+        for row in cursor.fetchall():
+            item = dict(row)
+            item['match_score'] = 100  # LIKE match
+            item['matched_field'] = 'like'
+            # Convert projects string to list
+            if item.get('projects'):
+                item['projects'] = [p.strip() for p in item['projects'].split(',') if p.strip()]
+            results.append(item)
+        return results
+
+
+def _contact_search_fuzzy(query: str, limit: int = 20, threshold: int = 60) -> list[dict]:
+    """
+    Fuzzy search using rapidfuzz.
+    
+    Search priority:
+    1. Contact fields: display_name, first_name, last_name
+    2. Organization, country, job_title
+    3. Channels: email, telegram, phone
+    4. Projects: code, description (via contact_projects)
+    """
+    query = query.strip()
+    if not query:
+        return []
+    
+    # Clean query for telegram search (handle @username)
+    query_clean = query.lstrip('@').lower()
+    
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        
+        # Get all active contacts with their channels AND projects
+        cursor.execute("""
+            SELECT 
+                cf.*,
+                GROUP_CONCAT(DISTINCT
+                    CASE 
+                        WHEN cc.channel_type = 'telegram_username' THEN '@' || cc.channel_value
+                        ELSE cc.channel_value 
+                    END, 
+                    '||'
+                ) as all_channels,
+                GROUP_CONCAT(DISTINCT cc.channel_type || ':' || cc.channel_value, '||') as channel_details,
+                GROUP_CONCAT(DISTINCT p.code, '||') as project_codes,
+                GROUP_CONCAT(DISTINCT p.description, '||') as project_descriptions
+            FROM v_contacts_full cf
+            LEFT JOIN contact_channels cc ON cf.id = cc.contact_id
+            LEFT JOIN contact_projects cp ON cf.id = cp.contact_id AND cp.is_active = 1
+            LEFT JOIN projects p ON cp.project_id = p.id AND p.is_active = 1
+            GROUP BY cf.id
+        """)
+        
+        contacts = [dict(row) for row in cursor.fetchall()]
+    
+    if not contacts:
+        return []
+    
+    results = []
+    
+    for contact in contacts:
+        # Fields to search with priorities
+        search_fields = {
+            # Priority 1: Name fields
+            'name': contact.get('display_name') or '',
+            'first_name': contact.get('first_name') or '',
+            'last_name': contact.get('last_name') or '',
+            # Priority 2: Organization/location
+            'organization': contact.get('organization') or '',
+            'country': contact.get('country') or '',
+            'job_title': contact.get('job_title') or '',
+        }
+        
+        # Parse channels
+        channel_details = contact.get('channel_details') or ''
+        if channel_details:
+            for ch in channel_details.split('||'):
+                if ':' in ch:
+                    ch_type, ch_value = ch.split(':', 1)
+                    if ch_type == 'email':
+                        search_fields['email'] = ch_value
+                    elif ch_type == 'telegram_username':
+                        search_fields['telegram'] = f'@{ch_value}'
+                    elif ch_type == 'phone':
+                        search_fields['phone'] = ch_value
+        
+        # Add project fields
+        project_codes = contact.get('project_codes') or ''
+        project_descriptions = contact.get('project_descriptions') or ''
+        if project_codes:
+            search_fields['project_code'] = project_codes.replace('||', ' ')
+        if project_descriptions:
+            search_fields['project'] = project_descriptions.replace('||', ' ')
+        
+        # Find best match
+        best_score = 0
+        best_field = None
+        
+        for field_name, field_value in search_fields.items():
+            if not field_value:
+                continue
+            
+            score_partial = fuzz.partial_ratio(query_clean, field_value.lower())
+            score_token = fuzz.token_set_ratio(query_clean, field_value.lower())
+            score = max(score_partial, score_token)
+            
+            if score > best_score:
+                best_score = score
+                best_field = field_name
+        
+        if best_score >= threshold:
+            contact_result = {k: v for k, v in contact.items() 
+                            if k not in ('all_channels', 'channel_details', 
+                                        'project_codes', 'project_descriptions')}
+            contact_result['match_score'] = best_score
+            contact_result['matched_field'] = best_field
+            # Add project info for context
+            if project_codes:
+                contact_result['projects'] = [p for p in project_codes.split('||') if p]
+            results.append(contact_result)
+    
+    results.sort(key=lambda x: (-x['match_score'], x.get('display_name', '')))
+    return results[:limit]
+
+
+def contact_search(
+    query: str, 
+    limit: int = 20,
+    threshold: int = 60
+) -> list[dict]:
+    """
+    Search contacts across multiple fields including project assignments.
+    
+    Uses rapidfuzz for fuzzy matching if available, 
+    falls back to SQL LIKE otherwise.
+    
+    Searchable fields (priority order):
+        1. Name: first_name, last_name, display_name
+        2. Organization: organization, country, job_title
+        3. Channels: email, telegram_username (@), phone
+        4. Projects: project code, project description
+    
+    Args:
+        query: Search string (case-insensitive, fuzzy if rapidfuzz installed)
+        limit: Max results (default 20)
+        threshold: Min fuzzy score 0-100 (default 60, ignored for LIKE)
+    
+    Returns:
+        List of contacts with:
+        - match_score: 0-100 (100 for LIKE matches)
+        - matched_field: which field matched
+        - projects: list of project codes contact is assigned to
+    
+    Examples:
+        - "Altynbek" → finds by name
+        - "CSUM" → finds contacts assigned to CSUM project
+        - "@altynbek" → finds by telegram username
+        - "Nepal" → finds contacts in Nepal OR on Nepal project
+    """
+    query = query.strip()
+    if not query:
+        return []
+    
+    if FUZZY_AVAILABLE:
+        return _contact_search_fuzzy(query, limit, threshold)
+    else:
+        return _contact_search_like(query, limit)
 
 
 # =============================================================================
