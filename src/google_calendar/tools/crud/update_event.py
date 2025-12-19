@@ -49,6 +49,11 @@ def update_event(
     3. Pass account="personal" (or matched name) to this function
     Do NOT use default account when user specifies a calendar name!
 
+    PROJECT CONTEXT:
+    If the user's project context is unclear or you need the list of available projects:
+    1. Call manage_time_tracking(operation="project_list_active") to get active projects
+    2. Use project information to properly categorize the event
+
     MOVE EVENT TO ANOTHER CALENDAR:
     To move an event to a different calendar:
     1. FIRST call manage_calendars(action="list") to get available calendars and their IDs

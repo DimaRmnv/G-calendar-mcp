@@ -39,6 +39,11 @@ def create_event(
     3. Pass account="personal" (or matched name) to this function
     Do NOT use default account when user specifies a calendar name!
 
+    PROJECT CONTEXT:
+    If the user's project context is unclear or you need the list of available projects:
+    1. Call manage_time_tracking(operation="project_list_active") to get active projects
+    2. Use project information to properly categorize the event
+
     NOTE: If skill 'calendar-manager' is available, follow its guidelines for event formatting (summary, description, etc.).
 
     Args:
