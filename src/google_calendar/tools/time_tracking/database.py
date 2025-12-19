@@ -55,6 +55,7 @@ def init_database() -> None:
                 code TEXT NOT NULL,
                 description TEXT NOT NULL,
                 is_billable INTEGER NOT NULL DEFAULT 0,
+                is_active INTEGER NOT NULL DEFAULT 1,
                 position TEXT,
                 structure_level INTEGER NOT NULL DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -147,11 +148,24 @@ def init_database() -> None:
             )
 
 
+def _migrate_add_is_active() -> None:
+    """Add is_active column to projects table if not exists."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(projects)")
+        columns = [col[1] for col in cursor.fetchall()]
+        if "is_active" not in columns:
+            cursor.execute("ALTER TABLE projects ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
+
+
 def ensure_database() -> bool:
     """Ensure database exists and is initialized. Returns True if newly created."""
     newly_created = not database_exists()
     if newly_created:
         init_database()
+    else:
+        # Run migrations for existing database
+        _migrate_add_is_active()
     return newly_created
 
 
@@ -163,6 +177,7 @@ def project_add(
     code: str,
     description: str,
     is_billable: bool = False,
+    is_active: bool = True,
     position: Optional[str] = None,
     structure_level: int = 1
 ) -> dict:
@@ -171,16 +186,17 @@ def project_add(
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT INTO projects (code, description, is_billable, position, structure_level)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO projects (code, description, is_billable, is_active, position, structure_level)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (code.upper(), description, int(is_billable), position, structure_level)
+            (code.upper(), description, int(is_billable), int(is_active), position, structure_level)
         )
         return {
             "id": cursor.lastrowid,
             "code": code.upper(),
             "description": description,
             "is_billable": is_billable,
+            "is_active": is_active,
             "position": position,
             "structure_level": structure_level
         }
@@ -200,29 +216,39 @@ def project_get(id: Optional[int] = None, code: Optional[str] = None) -> Optiona
         if row:
             result = dict(row)
             result["is_billable"] = bool(result["is_billable"])
+            result["is_active"] = bool(result.get("is_active", 1))
             return result
         return None
 
 
-def project_list(billable_only: bool = False) -> list[dict]:
+def project_list(billable_only: bool = False, active_only: bool = False) -> list[dict]:
     """List all projects."""
     with get_connection() as conn:
         cursor = conn.cursor()
+        conditions = []
         if billable_only:
-            cursor.execute("SELECT * FROM projects WHERE is_billable = 1 ORDER BY code")
-        else:
-            cursor.execute("SELECT * FROM projects ORDER BY code")
+            conditions.append("is_billable = 1")
+        if active_only:
+            conditions.append("is_active = 1")
+
+        query = "SELECT * FROM projects"
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY code"
+
+        cursor.execute(query)
         results = []
         for row in cursor.fetchall():
             item = dict(row)
             item["is_billable"] = bool(item["is_billable"])
+            item["is_active"] = bool(item.get("is_active", 1))
             results.append(item)
         return results
 
 
 def project_update(id: int, **kwargs) -> Optional[dict]:
     """Update project by id."""
-    allowed_fields = {"code", "description", "is_billable", "position", "structure_level"}
+    allowed_fields = {"code", "description", "is_billable", "is_active", "position", "structure_level"}
     updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
 
     if not updates:
@@ -230,6 +256,8 @@ def project_update(id: int, **kwargs) -> Optional[dict]:
 
     if "is_billable" in updates:
         updates["is_billable"] = int(updates["is_billable"])
+    if "is_active" in updates:
+        updates["is_active"] = int(updates["is_active"])
     if "code" in updates:
         updates["code"] = updates["code"].upper()
 
@@ -253,6 +281,26 @@ def project_delete(id: int) -> bool:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM projects WHERE id = ?", (id,))
         return cursor.rowcount > 0
+
+
+def project_list_active() -> list[dict]:
+    """Get active projects with their phases and tasks.
+
+    Returns projects with complete structure for event creation.
+    Use this when creating time tracking events to know available projects.
+    """
+    projects = project_list(active_only=True)
+    for project in projects:
+        project["phases"] = phase_list(project_id=project["id"])
+        project["tasks"] = task_list(project_id=project["id"])
+        # Add format hint based on structure_level
+        if project["structure_level"] == 1:
+            project["format"] = "PROJECT * Description"
+        elif project["structure_level"] == 2:
+            project["format"] = "PROJECT * PHASE * Description"
+        else:
+            project["format"] = "PROJECT * PHASE * TASK * Description"
+    return projects
 
 
 # =============================================================================
@@ -563,21 +611,23 @@ def get_project_by_code(code: str) -> Optional[dict]:
 
 
 def get_projects_by_code(code: str) -> list[dict]:
-    """Get ALL projects with the same code, ordered by structure_level DESC.
-    
+    """Get ALL active projects with the same code, ordered by structure_level DESC.
+
     This allows multiple projects with same code but different structure levels.
     Example: CAYIB Level 3 (with phases+tasks) and CAYIB Level 2 (phases only).
+    Only returns active projects (is_active=1) for parser use.
     """
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT * FROM projects WHERE code = ? ORDER BY structure_level DESC",
+            "SELECT * FROM projects WHERE code = ? AND is_active = 1 ORDER BY structure_level DESC",
             (code.upper(),)
         )
         results = []
         for row in cursor.fetchall():
             item = dict(row)
             item["is_billable"] = bool(item["is_billable"])
+            item["is_active"] = bool(item.get("is_active", 1))
             results.append(item)
         return results
 

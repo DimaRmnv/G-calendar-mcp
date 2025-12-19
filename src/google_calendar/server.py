@@ -56,7 +56,8 @@ Reference: manage_calendars, list_colors, manage_settings
 Move event: update_event(destination_calendar_id=...) - call manage_calendars(action="list") first
 
 TIME TRACKING (if enabled):
-time_tracking(operations=[...]) | time_tracking_report(report_type, output_format)
+time_tracking(operations=[...]) - Use project_list_active when creating events and unsure about available projects.
+time_tracking_report(report_type, output_format)
 
 TIME: '2024-12-15T10:00:00' (timed) or '2024-12-15' (all-day)."""
 )

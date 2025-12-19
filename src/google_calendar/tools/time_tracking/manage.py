@@ -12,7 +12,7 @@ from google_calendar.tools.time_tracking.database import (
     database_exists,
     get_database_path,
     # Projects
-    project_add, project_get, project_list, project_update, project_delete,
+    project_add, project_get, project_list, project_update, project_delete, project_list_active,
     # Phases
     phase_add, phase_get, phase_list, phase_update, phase_delete,
     # Tasks
@@ -33,13 +33,20 @@ OPERATIONS = {
         code=p["code"],
         description=p["description"],
         is_billable=p.get("is_billable", False),
+        is_active=p.get("is_active", True),
         position=p.get("position"),
         structure_level=p.get("structure_level", 1)
     ),
     "project_get": lambda p: project_get(id=p.get("id"), code=p.get("code")),
-    "project_list": lambda p: {"projects": project_list(billable_only=p.get("billable_only", False))},
+    "project_list": lambda p: {"projects": project_list(
+        billable_only=p.get("billable_only", False),
+        active_only=p.get("active_only", False)
+    )},
+    "project_list_active": lambda p: {"projects": project_list_active()},
     "project_update": lambda p: project_update(id=p["id"], **{k: v for k, v in p.items() if k != "id"}),
     "project_delete": lambda p: {"deleted": project_delete(id=p["id"])},
+    "project_activate": lambda p: project_update(id=p["id"], is_active=True),
+    "project_deactivate": lambda p: project_update(id=p["id"], is_active=False),
 
     # Phases
     "phase_add": lambda p: phase_add(
@@ -116,6 +123,9 @@ async def time_tracking(operations: list[dict]) -> dict:
     Execute multiple operations in a single call for efficient setup.
     All entities have integer 'id' for update/delete operations.
 
+    IMPORTANT: Use project_list_active when creating time tracking events
+    and you need to know available projects and their structure (phases/tasks).
+
     Args:
         operations: List of operations to execute. Each operation is a dict with:
             - op: Operation name (see below)
@@ -123,11 +133,15 @@ async def time_tracking(operations: list[dict]) -> dict:
 
     Operations:
         Projects (id is returned on add, required for update/delete):
-            - project_add: code, description, is_billable?, position?, structure_level?
+            - project_add: code, description, is_billable?, is_active?, position?, structure_level?
             - project_get: id or code
-            - project_list: billable_only?
-            - project_update: id, code?, description?, is_billable?, position?, structure_level?
+            - project_list: billable_only?, active_only?
+            - project_list_active: Get active projects with phases and tasks.
+              Use this when creating time tracking events to know available projects.
+            - project_update: id, code?, description?, is_billable?, is_active?, position?, structure_level?
             - project_delete: id
+            - project_activate: id (shortcut for setting is_active=True)
+            - project_deactivate: id (shortcut for setting is_active=False)
 
         Phases (require project_id):
             - phase_add: project_id, code, description?

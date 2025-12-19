@@ -124,7 +124,7 @@ def create_venv() -> Path:
 def install_dependencies(venv_python: Path) -> None:
     """Install dependencies into venv."""
     print("  Installing dependencies...")
-    
+
     dependencies = [
         "google-api-python-client>=2.100.0",
         "google-auth-oauthlib>=1.1.0",
@@ -132,17 +132,31 @@ def install_dependencies(venv_python: Path) -> None:
         "fastmcp>=0.1.0",
         "openpyxl>=3.1.0",
     ]
-    
+
     subprocess.run(
         [str(venv_python), "-m", "pip", "install", "--quiet", "--upgrade", "pip"],
         check=True,
         capture_output=True
     )
-    
+
     subprocess.run(
         [str(venv_python), "-m", "pip", "install", "--quiet"] + dependencies,
         check=True,
         capture_output=True
+    )
+
+
+def run_database_migrations(venv_python: Path, src_dir: Path) -> None:
+    """Run database migrations."""
+    print("  Running database migrations...")
+
+    env = {**dict(subprocess.os.environ), "PYTHONPATH": str(src_dir)}
+    subprocess.run(
+        [str(venv_python), "-c",
+         "from google_calendar.tools.time_tracking.database import ensure_database; ensure_database()"],
+        check=True,
+        capture_output=True,
+        env=env
     )
 
 
@@ -177,10 +191,11 @@ def install_to_claude(name: str = "google-calendar", standalone: bool = True, fo
         
         print("  Copying package to ~/.mcp/google-calendar/...")
         copy_package_to_mcp()
-        
+
         venv_python = create_venv()
         install_dependencies(venv_python)
-        
+        run_database_migrations(venv_python, src_dir)
+
         # Add server config pointing to installed location
         config["mcpServers"][name] = {
             "command": str(venv_python),
