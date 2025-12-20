@@ -9,6 +9,7 @@ from google_calendar.tools.contacts.lookup import (
     resolve_contact,
     resolve_multiple,
     get_preferred_channel,
+    contact_brief,
 )
 from google_calendar.tools.contacts.report import (
     contacts_report,
@@ -21,6 +22,7 @@ __all__ = [
     "resolve_contact",
     "resolve_multiple", 
     "get_preferred_channel",
+    "contact_brief",
     "contacts_report",
     "export_contacts_excel",
     "export_project_team_excel",

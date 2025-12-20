@@ -764,3 +764,525 @@ def suggest_new_contacts(
         'deduplication_note': 'Always check contact_resolve before creating to avoid duplicates',
         'retry_hint': 'If not enough results, retry with period="quarter" or period="year"'
     }
+
+
+def contact_brief(
+    contact_id: int,
+    days_back: int = 7,
+    days_forward: int = 7
+) -> dict:
+    """
+    Generate activity brief for a contact across all communication channels.
+    
+    Provides a unified view of recent interactions:
+    - Telegram: Recent messages from chat history
+    - Teams: Recent messages from chat history
+    - Gmail: Recent emails sent/received
+    - Calendar: Past meetings + upcoming events with this contact
+    
+    Args:
+        contact_id: Contact to brief
+        days_back: Days to look back for activity (default 7)
+        days_forward: Days to look forward for calendar events (default 7)
+    
+    Returns:
+        Dict with:
+        - contact: Basic contact info with all channels
+        - available_channels: Channels grouped by type for fetching
+        - fetch_instructions: List of tool calls for Claude to execute
+        - aggregation_hints: How to present the aggregated data
+    
+    Workflow for Claude:
+        1. Call contact_brief(contact_id, days_back, days_forward)
+        2. Execute each fetch instruction in parallel
+        3. Aggregate results into unified timeline
+        4. Present summary: recent activity + upcoming events
+    """
+    contact = _get_contact_with_channels(contact_id)
+    if not contact:
+        return {"error": f"Contact {contact_id} not found"}
+    
+    from datetime import datetime, timedelta
+    now = datetime.now()
+    past_date = (now - timedelta(days=days_back)).strftime('%Y-%m-%dT00:00:00')
+    future_date = (now + timedelta(days=days_forward)).strftime('%Y-%m-%dT23:59:59')
+    past_date_iso = (now - timedelta(days=days_back)).strftime('%Y-%m-%d')
+    
+    # Group channels by type
+    channels_by_type = {}
+    for ch in contact.get('channels', []):
+        ch_type = ch['channel_type']
+        if ch_type not in channels_by_type:
+            channels_by_type[ch_type] = []
+        channels_by_type[ch_type].append(ch)
+    
+    # Build fetch instructions
+    fetch_instructions = []
+    
+    # --- TELEGRAM ---
+    telegram_chat_id = channels_by_type.get('telegram_chat_id', [{}])[0].get('channel_value')
+    telegram_id = channels_by_type.get('telegram_id', [{}])[0].get('channel_value')
+    chat_id_for_telegram = telegram_chat_id or telegram_id
+    
+    if chat_id_for_telegram:
+        # Calculate message limit based on days_back
+        msg_limit = min(days_back * 10, 100)  # ~10 messages per day, max 100
+        fetch_instructions.append({
+            'source': 'telegram',
+            'priority': 1,
+            'description': f'Recent Telegram messages (last {days_back} days)',
+            'tool': 'telegram:read_chat',
+            'params': {
+                'chat': int(chat_id_for_telegram),
+                'limit': msg_limit,
+                'include_info': True
+            },
+            'filter_hint': f'Filter messages where date >= {past_date_iso}',
+            'extract': {
+                'messages': 'messages[]',
+                'fields': ['id', 'date', 'text', 'out']
+            },
+            'presentation': 'Show as timeline with date, direction (in/out), snippet'
+        })
+    
+    # --- TEAMS ---
+    teams_chat_id = channels_by_type.get('teams_chat_id', [{}])[0].get('channel_value')
+    
+    if teams_chat_id:
+        msg_limit = min(days_back * 5, 50)  # ~5 messages per day, max 50
+        fetch_instructions.append({
+            'source': 'teams',
+            'priority': 1,
+            'description': f'Recent Teams messages (last {days_back} days)',
+            'tool': 'teams:read_messages',
+            'params': {
+                'chat_id': teams_chat_id,
+                'limit': msg_limit
+            },
+            'filter_hint': f'Filter messages where date >= {past_date_iso}',
+            'extract': {
+                'messages': 'messages[]',
+                'fields': ['id', 'date', 'sender', 'text']
+            },
+            'presentation': 'Show as timeline with date, sender, snippet'
+        })
+    
+    # --- GMAIL ---
+    emails = channels_by_type.get('email', [])
+    primary_email = next((e['channel_value'] for e in emails if e.get('is_primary')), None)
+    if not primary_email and emails:
+        primary_email = emails[0]['channel_value']
+    
+    if primary_email:
+        # Search for emails from/to this contact
+        fetch_instructions.append({
+            'source': 'gmail',
+            'priority': 1,
+            'description': f'Recent emails with {primary_email} (last {days_back} days)',
+            'tool': 'google-mail:find_context',
+            'params': {
+                'topic': primary_email,
+                'period_days': days_back,
+                'max_results': 20,
+                'include_sent': True
+            },
+            'extract': {
+                'timeline': 'timeline[]',
+                'fields': ['date', 'from', 'to', 'subject', 'snippet']
+            },
+            'presentation': 'Show as email thread summaries with subject and direction'
+        })
+        
+        # Alternative: direct search if find_context not available
+        fetch_instructions.append({
+            'source': 'gmail_alt',
+            'priority': 2,
+            'description': f'Alternative: Search emails with {primary_email}',
+            'tool': 'google-mail:search_emails',
+            'params': {
+                'query': f'from:{primary_email} OR to:{primary_email}',
+                'period': 'week' if days_back <= 7 else 'month',
+                'max_results': 20
+            },
+            'note': 'Use if find_context returns empty or errors'
+        })
+    
+    # --- CALENDAR (past) ---
+    if primary_email:
+        fetch_instructions.append({
+            'source': 'calendar_past',
+            'priority': 1,
+            'description': f'Past meetings with {contact.get("display_name")} (last {days_back} days)',
+            'tool': 'google-calendar:search_events',
+            'params': {
+                'query': primary_email,
+                'time_min': past_date,
+                'time_max': now.strftime('%Y-%m-%dT%H:%M:%S'),
+                'max_results': 20
+            },
+            'extract': {
+                'events': 'events[]',
+                'fields': ['id', 'summary', 'start', 'end', 'status']
+            },
+            'presentation': 'Show as "Past meetings" section with date and event title'
+        })
+        
+        # --- CALENDAR (upcoming) ---
+        fetch_instructions.append({
+            'source': 'calendar_upcoming',
+            'priority': 1,
+            'description': f'Upcoming meetings with {contact.get("display_name")} (next {days_forward} days)',
+            'tool': 'google-calendar:search_events',
+            'params': {
+                'query': primary_email,
+                'time_min': now.strftime('%Y-%m-%dT%H:%M:%S'),
+                'time_max': future_date,
+                'max_results': 20
+            },
+            'extract': {
+                'events': 'events[]',
+                'fields': ['id', 'summary', 'start', 'end', 'status', 'htmlLink']
+            },
+            'presentation': 'Show as "Upcoming meetings" section with date, time, title, link'
+        })
+    else:
+        # No email - search by name
+        display_name = contact.get('display_name', '')
+        if display_name:
+            fetch_instructions.append({
+                'source': 'calendar_past',
+                'priority': 2,
+                'description': f'Past meetings mentioning "{display_name}" (last {days_back} days)',
+                'tool': 'google-calendar:search_events',
+                'params': {
+                    'query': display_name,
+                    'time_min': past_date,
+                    'time_max': now.strftime('%Y-%m-%dT%H:%M:%S'),
+                    'max_results': 10
+                },
+                'note': 'Name-based search less reliable than email; may include false positives'
+            })
+            
+            fetch_instructions.append({
+                'source': 'calendar_upcoming',
+                'priority': 2,
+                'description': f'Upcoming meetings mentioning "{display_name}" (next {days_forward} days)',
+                'tool': 'google-calendar:search_events',
+                'params': {
+                    'query': display_name,
+                    'time_min': now.strftime('%Y-%m-%dT%H:%M:%S'),
+                    'time_max': future_date,
+                    'max_results': 10
+                },
+                'note': 'Name-based search less reliable than email'
+            })
+    
+    # Count available channels
+    available_sources = []
+    if chat_id_for_telegram:
+        available_sources.append('telegram')
+    if teams_chat_id:
+        available_sources.append('teams')
+    if primary_email:
+        available_sources.append('gmail')
+        available_sources.append('calendar')
+    
+    return {
+        'contact': {
+            'id': contact['id'],
+            'display_name': contact.get('display_name'),
+            'organization': contact.get('organization'),
+            'job_title': contact.get('job_title'),
+            'country': contact.get('country'),
+            'preferred_channel': contact.get('preferred_channel'),
+            'projects': contact.get('projects', [])
+        },
+        'available_channels': channels_by_type,
+        'available_sources': available_sources,
+        'time_range': {
+            'past': f'{days_back} days back ({past_date_iso})',
+            'future': f'{days_forward} days forward',
+            'past_date': past_date,
+            'future_date': future_date
+        },
+        'fetch_instructions': fetch_instructions,
+        'instruction_count': len([f for f in fetch_instructions if f.get('priority') == 1]),
+        'workflow': [
+            '1. Execute all priority=1 fetch instructions in parallel',
+            '2. If any fail, try priority=2 alternatives',
+            '3. Filter results by date range if tool doesn\'t support it natively',
+            '4. Aggregate into unified brief with sections:',
+            '   - Contact summary (from contact field)',
+            '   - Upcoming events (calendar_upcoming)',
+            '   - Recent activity timeline (merge telegram + teams + gmail by date)',
+            '   - Past meetings (calendar_past)',
+            '5. Highlight: last interaction date, next scheduled meeting, pending items'
+        ],
+        'aggregation_hints': {
+            'timeline_merge': 'Sort all messages/emails by date descending',
+            'highlight_unanswered': 'Flag incoming messages without outgoing response within 24h',
+            'meeting_context': 'For upcoming meetings, include last email/message as context',
+            'summary_stats': 'Count: messages exchanged, emails, meetings in period'
+        }
+    }
+
+
+def contact_brief(
+    contact_id: int,
+    days_back: int = 7,
+    days_forward: int = 7
+) -> dict:
+    """
+    Generate activity brief for a contact across all communication channels.
+    
+    Provides a unified view of recent interactions:
+    - Telegram: Recent messages from chat history
+    - Teams: Recent messages from chat history
+    - Gmail: Recent emails sent/received
+    - Calendar: Past meetings + upcoming events with this contact
+    
+    Args:
+        contact_id: Contact to brief
+        days_back: Days to look back for activity (default 7)
+        days_forward: Days to look forward for calendar events (default 7)
+    
+    Returns:
+        Dict with:
+        - contact: Basic contact info with all channels
+        - available_channels: Channels grouped by type for fetching
+        - fetch_instructions: List of tool calls for Claude to execute
+        - aggregation_hints: How to present the aggregated data
+    
+    Workflow for Claude:
+        1. Call contact_brief(contact_id, days_back, days_forward)
+        2. Execute each fetch instruction in parallel
+        3. Aggregate results into unified timeline
+        4. Present summary: recent activity + upcoming events
+    """
+    contact = _get_contact_with_channels(contact_id)
+    if not contact:
+        return {"error": f"Contact {contact_id} not found"}
+    
+    from datetime import datetime, timedelta
+    now = datetime.now()
+    past_date = (now - timedelta(days=days_back)).strftime('%Y-%m-%dT00:00:00')
+    future_date = (now + timedelta(days=days_forward)).strftime('%Y-%m-%dT23:59:59')
+    past_date_iso = (now - timedelta(days=days_back)).strftime('%Y-%m-%d')
+    
+    # Group channels by type
+    channels_by_type = {}
+    for ch in contact.get('channels', []):
+        ch_type = ch['channel_type']
+        if ch_type not in channels_by_type:
+            channels_by_type[ch_type] = []
+        channels_by_type[ch_type].append(ch)
+    
+    # Build fetch instructions
+    fetch_instructions = []
+    
+    # --- TELEGRAM ---
+    telegram_chat_id = channels_by_type.get('telegram_chat_id', [{}])[0].get('channel_value')
+    telegram_id = channels_by_type.get('telegram_id', [{}])[0].get('channel_value')
+    chat_id_for_telegram = telegram_chat_id or telegram_id
+    
+    if chat_id_for_telegram:
+        # Calculate message limit based on days_back
+        msg_limit = min(days_back * 10, 100)  # ~10 messages per day, max 100
+        fetch_instructions.append({
+            'source': 'telegram',
+            'priority': 1,
+            'description': f'Recent Telegram messages (last {days_back} days)',
+            'tool': 'telegram:read_chat',
+            'params': {
+                'chat': int(chat_id_for_telegram),
+                'limit': msg_limit,
+                'include_info': True
+            },
+            'filter_hint': f'Filter messages where date >= {past_date_iso}',
+            'extract': {
+                'messages': 'messages[]',
+                'fields': ['id', 'date', 'text', 'out']
+            },
+            'presentation': 'Show as timeline with date, direction (in/out), snippet'
+        })
+    
+    # --- TEAMS ---
+    teams_chat_id = channels_by_type.get('teams_chat_id', [{}])[0].get('channel_value')
+    
+    if teams_chat_id:
+        msg_limit = min(days_back * 5, 50)  # ~5 messages per day, max 50
+        fetch_instructions.append({
+            'source': 'teams',
+            'priority': 1,
+            'description': f'Recent Teams messages (last {days_back} days)',
+            'tool': 'teams:read_messages',
+            'params': {
+                'chat_id': teams_chat_id,
+                'limit': msg_limit
+            },
+            'filter_hint': f'Filter messages where date >= {past_date_iso}',
+            'extract': {
+                'messages': 'messages[]',
+                'fields': ['id', 'date', 'sender', 'text']
+            },
+            'presentation': 'Show as timeline with date, sender, snippet'
+        })
+    
+    # --- GMAIL ---
+    emails = channels_by_type.get('email', [])
+    primary_email = next((e['channel_value'] for e in emails if e.get('is_primary')), None)
+    if not primary_email and emails:
+        primary_email = emails[0]['channel_value']
+    
+    if primary_email:
+        # Search for emails from/to this contact
+        fetch_instructions.append({
+            'source': 'gmail',
+            'priority': 1,
+            'description': f'Recent emails with {primary_email} (last {days_back} days)',
+            'tool': 'google-mail:find_context',
+            'params': {
+                'topic': primary_email,
+                'period_days': days_back,
+                'max_results': 20,
+                'include_sent': True
+            },
+            'extract': {
+                'timeline': 'timeline[]',
+                'fields': ['date', 'from', 'to', 'subject', 'snippet']
+            },
+            'presentation': 'Show as email thread summaries with subject and direction'
+        })
+        
+        # Alternative: direct search if find_context not available
+        fetch_instructions.append({
+            'source': 'gmail_alt',
+            'priority': 2,
+            'description': f'Alternative: Search emails with {primary_email}',
+            'tool': 'google-mail:search_emails',
+            'params': {
+                'query': f'from:{primary_email} OR to:{primary_email}',
+                'period': 'week' if days_back <= 7 else 'month',
+                'max_results': 20
+            },
+            'note': 'Use if find_context returns empty or errors'
+        })
+    
+    # --- CALENDAR (past) ---
+    if primary_email:
+        fetch_instructions.append({
+            'source': 'calendar_past',
+            'priority': 1,
+            'description': f'Past meetings with {contact.get("display_name")} (last {days_back} days)',
+            'tool': 'google-calendar:search_events',
+            'params': {
+                'query': primary_email,
+                'time_min': past_date,
+                'time_max': now.strftime('%Y-%m-%dT%H:%M:%S'),
+                'max_results': 20
+            },
+            'extract': {
+                'events': 'events[]',
+                'fields': ['id', 'summary', 'start', 'end', 'status']
+            },
+            'presentation': 'Show as "Past meetings" section with date and event title'
+        })
+        
+        # --- CALENDAR (upcoming) ---
+        fetch_instructions.append({
+            'source': 'calendar_upcoming',
+            'priority': 1,
+            'description': f'Upcoming meetings with {contact.get("display_name")} (next {days_forward} days)',
+            'tool': 'google-calendar:search_events',
+            'params': {
+                'query': primary_email,
+                'time_min': now.strftime('%Y-%m-%dT%H:%M:%S'),
+                'time_max': future_date,
+                'max_results': 20
+            },
+            'extract': {
+                'events': 'events[]',
+                'fields': ['id', 'summary', 'start', 'end', 'status', 'htmlLink']
+            },
+            'presentation': 'Show as "Upcoming meetings" section with date, time, title, link'
+        })
+    else:
+        # No email - search by name
+        display_name = contact.get('display_name', '')
+        if display_name:
+            fetch_instructions.append({
+                'source': 'calendar_past',
+                'priority': 2,
+                'description': f'Past meetings mentioning "{display_name}" (last {days_back} days)',
+                'tool': 'google-calendar:search_events',
+                'params': {
+                    'query': display_name,
+                    'time_min': past_date,
+                    'time_max': now.strftime('%Y-%m-%dT%H:%M:%S'),
+                    'max_results': 10
+                },
+                'note': 'Name-based search less reliable than email; may include false positives'
+            })
+            
+            fetch_instructions.append({
+                'source': 'calendar_upcoming',
+                'priority': 2,
+                'description': f'Upcoming meetings mentioning "{display_name}" (next {days_forward} days)',
+                'tool': 'google-calendar:search_events',
+                'params': {
+                    'query': display_name,
+                    'time_min': now.strftime('%Y-%m-%dT%H:%M:%S'),
+                    'time_max': future_date,
+                    'max_results': 10
+                },
+                'note': 'Name-based search less reliable than email'
+            })
+    
+    # Count available channels
+    available_sources = []
+    if chat_id_for_telegram:
+        available_sources.append('telegram')
+    if teams_chat_id:
+        available_sources.append('teams')
+    if primary_email:
+        available_sources.append('gmail')
+        available_sources.append('calendar')
+    
+    return {
+        'contact': {
+            'id': contact['id'],
+            'display_name': contact.get('display_name'),
+            'organization': contact.get('organization'),
+            'job_title': contact.get('job_title'),
+            'country': contact.get('country'),
+            'preferred_channel': contact.get('preferred_channel'),
+            'projects': contact.get('projects', [])
+        },
+        'available_channels': channels_by_type,
+        'available_sources': available_sources,
+        'time_range': {
+            'past': f'{days_back} days back ({past_date_iso})',
+            'future': f'{days_forward} days forward',
+            'past_date': past_date,
+            'future_date': future_date
+        },
+        'fetch_instructions': fetch_instructions,
+        'instruction_count': len([f for f in fetch_instructions if f.get('priority') == 1]),
+        'workflow': [
+            '1. Execute all priority=1 fetch instructions in parallel',
+            '2. If any fail, try priority=2 alternatives',
+            '3. Filter results by date range if tool doesn\'t support it natively',
+            '4. Aggregate into unified brief with sections:',
+            '   - Contact summary (from contact field)',
+            '   - Upcoming events (calendar_upcoming)',
+            '   - Recent activity timeline (merge telegram + teams + gmail by date)',
+            '   - Past meetings (calendar_past)',
+            '5. Highlight: last interaction date, next scheduled meeting, pending items'
+        ],
+        'aggregation_hints': {
+            'timeline_merge': 'Sort all messages/emails by date descending',
+            'highlight_unanswered': 'Flag incoming messages without outgoing response within 24h',
+            'meeting_context': 'For upcoming meetings, include last email/message as context',
+            'summary_stats': 'Count: messages exchanged, emails, meetings in period'
+        }
+    }

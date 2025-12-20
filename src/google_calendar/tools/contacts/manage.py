@@ -21,6 +21,7 @@ from google_calendar.tools.contacts.lookup import (
     get_preferred_channel,
     suggest_enrichment,
     suggest_new_contacts,
+    contact_brief,
 )
 from google_calendar.tools.contacts.report import (
     contacts_report,
@@ -162,6 +163,11 @@ OPERATIONS = {
         limit=p.get("limit", 20),
         period=p.get("period", "month")
     ),
+    "contact_brief": lambda p: contact_brief(
+        contact_id=p["contact_id"],
+        days_back=p.get("days_back", 7),
+        days_forward=p.get("days_forward", 7)
+    ),
 
     # Reporting operations
     "report": lambda p: contacts_report(
@@ -235,6 +241,11 @@ async def contacts(operations: list[dict]) -> dict:
                    and create new contacts from Telegram/Teams chats, Gmail, Calendar
                 → Period controls time depth: today, week, month (default), quarter, year
                 → Limit auto-scales with period for sources without date filtering
+            contact_brief: contact_id, days_back?, days_forward?
+                → Returns fetch instructions for all channels (Telegram, Teams, Gmail, Calendar)
+                → days_back: lookback period (default 7)
+                → days_forward: calendar lookahead (default 7)
+                → Claude executes instructions, aggregates into unified brief
         
         Reporting:
             report: report_type, project_id?, organization?, days_stale?, limit?

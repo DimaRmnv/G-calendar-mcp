@@ -1,20 +1,34 @@
-# GCalendar MCP
+# Google Calendar MCP Server
 
-A Model Context Protocol server that gives Claude direct access to your Google Calendar. Create events, check availability, find meeting slots across timezones, and get intelligent schedule analysis through natural conversation.
+MCP (Model Context Protocol) server for Google Calendar integration with Claude Desktop. Provides comprehensive calendar management, multi-account support, time tracking, and contacts management.
 
-## Why This Tool
+## Features
 
-**Cross-timezone scheduling.** `find_meeting_slots` finds slots that work across multiple timezones. Specify participant timezones and working hours — get ranked slots with local times for everyone.
+**Core Calendar**
+- Full CRUD operations for events (create, read, update, delete)
+- Recurring event support with scope control (single instance, all, following)
+- Attendee management with RSVP tracking
+- Free/busy queries and meeting slot finder
+- Batch operations for bulk changes
+- Weekly briefing with analytics
 
-**One-shot meeting creation.** Create events with Google Meet links, attendees, reminders, and recurrence in a single command.
+**Multi-Account Support**
+- Multiple Google accounts (work, personal, etc.)
+- Account-aware tool calls with `account` parameter
+- Per-account OAuth token management
 
-**Time tracking (optional).** Track billable hours, generate timesheet reports, monitor progress against monthly targets. Parse calendar events by project/phase/task codes.
+**Time Tracking** *(optional module)*
+- Project/phase/task hierarchy with billable flags
+- Monthly hour norms and progress tracking
+- Calendar event parsing with customizable patterns
+- Excel report generation (weekly, monthly, custom)
 
-**Weekly intelligence.** `weekly_brief` synthesizes your schedule: total hours, busiest day, free days, conflicts, large meetings.
-
-**Multi-account support.** Switch between work and personal calendars mid-conversation. Each account has separate OAuth tokens.
-
-**Batch operations.** Create, update, or delete multiple events in one request.
+**Contacts Management** *(optional module)*
+- Contact database with multi-channel support (email, phone, Telegram, Teams)
+- Project role assignments with 19 standard roles
+- Fuzzy search and intelligent contact resolution
+- Integration with Telegram/Teams/Gmail for enrichment
+- Excel export for contacts and project teams
 
 ## Installation
 
@@ -27,314 +41,453 @@ A Model Context Protocol server that gives Claude direct access to your Google C
 ### Setup
 
 ```bash
-git clone https://github.com/dmytroromanov/google-calendar-mcp.git
-cd google-calendar-mcp
+# Clone repository
+git clone https://github.com/DimaRmnv/G-calendar-mcp.git
+cd G-calendar-mcp
+
+# Create virtual environment
+python -m venv .venv
+source .venv/bin/activate  # or .venv\Scripts\activate on Windows
+
+# Install package
 pip install -e .
-python -m google_calendar auth
-python -m google_calendar install
 ```
 
-Restart Claude Desktop after installation.
+### Google OAuth Configuration
 
-### Google Cloud Configuration
-
-1. [Google Cloud Console](https://console.cloud.google.com/) → Create or select project
-2. APIs & Services → Library → Google Calendar API → Enable
-3. APIs & Services → Credentials → Create Credentials → OAuth client ID → Desktop app
-4. Download JSON file
-5. Paste JSON content when `google-calendar-mcp auth` prompts
-
----
-
-## Time Tracking (Optional Feature)
-
-Track project hours, billable time, and generate timesheet reports based on calendar events. Disabled by default.
-
-### Enable Time Tracking
+1. Create a project in [Google Cloud Console](https://console.cloud.google.com/)
+2. Enable Google Calendar API
+3. Create OAuth 2.0 credentials (Desktop application)
+4. Download `client_secret.json`
 
 ```bash
-# Enable the feature
-python -m google_calendar time-tracking enable
+# Initialize with OAuth credentials
+google-calendar-mcp setup /path/to/client_secret.json
 
-# Initialize database with default projects
-python -m google_calendar time-tracking init
+# Add Google account
+google-calendar-mcp add-account work
+# Opens browser for OAuth consent
 
-# Restart Claude Desktop to load new tools
+# Optional: add more accounts
+google-calendar-mcp add-account personal
 ```
 
-### Event Format
+### Claude Desktop Configuration
 
-Events are parsed from summary using delimiter ` * ` or `:`. Structure level = number of components after PROJECT:
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
 
-| Structure Level | Format | Example |
-|-----------------|--------|---------|
-| Level 1 (simple) | `PROJECT * Description` | `CSUM * Prepare MFO assessment` |
-| Level 2 (phase) | `PROJECT * PHASE * Description` | `BCH * AI * Review implementation options` |
-| Level 3 (full) | `PROJECT * PHASE * TASK * Description` | `ADB25 * UZ-Davr * BA * Review financial statements` |
-
-### Time Tracking Tools
-
-| Tool | Purpose |
-|------|---------|
-| `time_tracking_status` | Quick WTD/MTD summary with on-track percentages |
-| `time_tracking_report` | Full report with Excel export |
-| `time_tracking_projects` | CRUD for projects (add/list/update/delete) |
-| `time_tracking_phases` | CRUD for project phases |
-| `time_tracking_tasks` | CRUD for task types |
-| `time_tracking_norms` | Set monthly working hours norms |
-| `time_tracking_exclusions` | Patterns to skip (Away, Lunch, etc.) |
-| `time_tracking_config` | Settings: work_calendar, billable_target, base_location |
-| `time_tracking_init` | Initialize database with defaults |
-
-### Configuration
-
-```
-"Set my work calendar to dmytro.romanov@bfconsulting.com"
-"Set billable target to 75 percent"
-"Set base location to Bangkok"
+```json
+{
+  "mcpServers": {
+    "google-calendar": {
+      "command": "/path/to/G-calendar-mcp/.venv/bin/python",
+      "args": ["-m", "google_calendar"]
+    }
+  }
+}
 ```
 
-Settings:
-- `work_calendar`: Calendar ID to track (default: primary)
-- `billable_target_type`: "percent" or "days"
-- `billable_target_value`: Target number (e.g., 75 for 75%, or 15 for 15 days)
-- `base_location`: Home city for context
+## Configuration
 
-### Reports
-
-```
-"Show my time tracking status"
-"Generate timesheet report for this month"
-"Create Excel report for last week"
-```
-
-Report metrics:
-- Total hours worked vs norm
-- Billable hours vs target
-- On-track percentage (should be ~100% if keeping pace)
-- Breakdown by project
-- Events with parsing errors
-
-### Default Projects
-
-Initialization populates:
-- **Billable (Level 3 - full):** ADB25, CAYIB, EDD
-- **Billable (Level 1 - simple):** UFSP, CSUM, SEDRA3, EFCF, AIYL-MN
-- **Non-billable (Level 2 - phase):** BCH, BFC, BDU, BDU-TEN
-- **Non-billable (Level 1 - simple):** MABI4, OPP, MAPS
-- **Workday norms:** 2025 Thailand calendar
-- **Exclusions:** Away, Lunch, Offline, Out of office
-
-Customize with CRUD tools after initialization.
-
-### CLI Commands
-
-```bash
-python -m google_calendar time-tracking enable      # Enable feature
-python -m google_calendar time-tracking disable     # Disable feature
-python -m google_calendar time-tracking status      # Show status
-python -m google_calendar time-tracking init        # Create database with defaults
-python -m google_calendar time-tracking init --no-defaults  # Empty database
-```
-
-### Data Storage
+Configuration stored in `~/.mcp/google-calendar/`:
 
 ```
 ~/.mcp/google-calendar/
-├── time_tracking.db     # SQLite database
-├── reports/             # Generated Excel files
-└── ...
+├── config.json          # Accounts and feature flags
+├── oauth_client.json    # OAuth credentials
+├── tokens/              # Per-account OAuth tokens
+│   ├── work.json
+│   └── personal.json
+├── cache/               # Response caching
+└── time_tracking.db     # SQLite database (time tracking + contacts)
 ```
 
----
+### Enable Optional Modules
 
-## Calendar Tools
+Edit `~/.mcp/google-calendar/config.json`:
 
-### list_events
-
-List calendar events with time range filters.
-
-```
-"What's on my calendar today?"
-"Show me this week's events"
-```
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| calendar_id | `"primary"` | Calendar to query |
-| period | `None` | Quick filter: `today`, `tomorrow`, `week`, `month` |
-| time_min / time_max | `None` | ISO 8601 datetime range |
-| query | `None` | Text search |
-| max_results | `50` | 1-250 |
-
-### create_event
-
-Create calendar event with full parameter support.
-
-```
-"Schedule a meeting with john@example.com tomorrow at 2pm for 1 hour"
-"Create a weekly standup every Monday at 9am with Meet link"
+```json
+{
+  "default_account": "work",
+  "accounts": {
+    "work": {"email": "user@company.com"},
+    "personal": {"email": "user@gmail.com"}
+  },
+  "time_tracking": {
+    "enabled": true
+  },
+  "contacts": {
+    "enabled": true
+  }
+}
 ```
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| summary | required | Event title |
-| start / end | required | Datetime or date for all-day |
-| attendees | `None` | List of email addresses |
-| add_meet_link | `False` | Generate Google Meet link |
-| recurrence | `None` | RFC5545 RRULE |
-| reminders_minutes | `None` | List: `[10, 60]` |
+Or use CLI:
 
-**Recurrence examples:**
+```bash
+google-calendar-mcp enable-time-tracking
+google-calendar-mcp enable-contacts
+```
 
-| Pattern | Rule |
-|---------|------|
-| Daily for 5 days | `["RRULE:FREQ=DAILY;COUNT=5"]` |
-| Every weekday | `["RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"]` |
-| Monthly on 15th | `["RRULE:FREQ=MONTHLY;BYMONTHDAY=15"]` |
+## Available Tools
 
-### get_event
+### Core Calendar Tools
 
-Get full event details including attendees and Meet link.
+| Tool | Description |
+|------|-------------|
+| `list_events` | List events with time filters (`period`: today/week/month) |
+| `create_event` | Create event with optional Meet link, attendees, recurrence |
+| `get_event` | Get full event details including attendees |
+| `update_event` | Update event; supports `scope` for recurring events |
+| `delete_event` | Delete event; supports `scope` for recurring events |
+| `search_events` | Free-text search across events |
+| `get_freebusy` | Check availability for calendars |
 
-### update_event
+### Reference Tools
 
-Modify existing event. For recurring events, use `scope="single"` or `scope="all"`.
+| Tool | Description |
+|------|-------------|
+| `manage_calendars` | List/create/update/delete calendars |
+| `list_colors` | Get available event colors |
+| `manage_settings` | Get/set timezone, list accounts |
 
-### delete_event
+### Attendees Tools
 
-Delete event. For recurring: `scope="single"` (this instance) or `scope="all"` (series).
+| Tool | Description |
+|------|-------------|
+| `manage_attendees` | Add/remove/list attendees, resend invites |
+| `respond_to_event` | RSVP to event invitations |
 
-### search_events
+### Intelligence Tools
 
-Full-text search across title, description, location, attendees.
+| Tool | Description |
+|------|-------------|
+| `batch_operations` | Execute multiple create/update/delete in one call |
+| `find_meeting_slots` | Find available slots across calendars and timezones |
+| `weekly_brief` | Generate weekly schedule summary with analytics |
 
-### get_freebusy
+### Time Tracking Tools
 
-Check availability across calendars for a time range.
+| Tool | Description |
+|------|-------------|
+| `time_tracking` | Batch operations for projects, phases, tasks, norms, config |
+| `time_tracking_report` | Generate status, weekly, monthly, or custom reports |
 
-### manage_attendees
+### Contacts Tools
 
-Add, remove, list, or resend invitations. Actions: `list`, `add`, `remove`, `resend`.
+| Tool | Description |
+|------|-------------|
+| `contacts` | Batch operations for contacts, channels, assignments, roles |
 
-### respond_to_event
+## Time Tracking Module
 
-RSVP to invitation: `accepted`, `declined`, `tentative`.
+The time tracking module parses calendar events to calculate billable and non-billable hours against monthly norms.
 
-### batch_operations
+### Event Title Format
 
-Execute multiple create/update/delete operations in one request.
-
-### find_meeting_slots
-
-Find available times across calendars and timezones.
+Events are parsed using configurable patterns. Default format:
 
 ```
+[PROJECT] Description
+[PROJECT:PHASE] Description
+[PROJECT:PHASE:TASK] Description
+```
+
+Examples:
+- `[CAYIB] Inception workshop preparation`
+- `[SEDRA3:P2] Report drafting`
+- `[EDD:DD:Analysis] Bank X assessment`
+
+### Project Structure Levels
+
+Projects support 1-3 level hierarchies:
+
+| Level | Structure | Example |
+|-------|-----------|---------|
+| 1 | Project only | `[BFC]` |
+| 2 | Project + Phase | `[CAYIB:P1]` |
+| 3 | Project + Phase + Task | `[EDD:DD:Analysis]` |
+
+### Operations
+
+```python
+# Initialize database
+time_tracking(operations=[{"op": "init"}])
+
+# Add project with phases
+time_tracking(operations=[
+    {"op": "project_add", "code": "CAYIB", "description": "Central Asia Youth in Business", 
+     "is_billable": True, "structure_level": 2},
+    {"op": "phase_add", "project_id": 1, "code": "P1", "description": "Inception"},
+    {"op": "phase_add", "project_id": 1, "code": "P2", "description": "Implementation"}
+])
+
+# Set monthly norm
+time_tracking(operations=[
+    {"op": "norm_add", "year": 2025, "month": 1, "hours": 176}
+])
+
+# Get active projects (for event creation)
+time_tracking(operations=[{"op": "project_list_active"}])
+
+# Generate reports
+time_tracking_report(report_type="status")  # Quick WTD/MTD summary
+time_tracking_report(report_type="week")    # Weekly breakdown → Excel
+time_tracking_report(report_type="month")   # Monthly breakdown → Excel
+```
+
+### Report Types
+
+| Type | Output | Description |
+|------|--------|-------------|
+| `status` | JSON | Week-to-date and month-to-date progress with on-track % |
+| `week` | JSON + Excel | Daily breakdown with project hours |
+| `month` | JSON + Excel | Full month analysis with billable/non-billable split |
+| `custom` | JSON + Excel | Custom date range via `start_date`/`end_date` |
+
+## Contacts Module
+
+The contacts module provides a CRM-like database for managing contacts across projects with multi-channel communication support.
+
+### Database Schema
+
+```
+contacts                 # Core contact info
+├── contact_channels     # Email, phone, Telegram, Teams, etc.
+├── contact_projects     # Role assignments to projects
+└── project_roles        # 19 standard consultant/client/donor roles
+```
+
+### Operations
+
+```python
+# Initialize contacts tables
+contacts(operations=[{"op": "init"}])
+
+# Add contact with channels
+contacts(operations=[
+    {"op": "contact_add", "first_name": "John", "last_name": "Smith",
+     "organization": "ADB", "organization_type": "donor", "country": "Philippines"},
+    {"op": "channel_add", "contact_id": 1, "channel_type": "email",
+     "channel_value": "jsmith@adb.org", "is_primary": True},
+    {"op": "channel_add", "contact_id": 1, "channel_type": "telegram_username",
+     "channel_value": "johnsmith"}
+])
+
+# Assign to project
+contacts(operations=[
+    {"op": "assignment_add", "contact_id": 1, "project_id": 1, "role_code": "DO"}
+])
+
+# Search contacts (fuzzy matching)
+contacts(operations=[{"op": "contact_search", "query": "John"}])
+
+# Resolve contact from any identifier
+contacts(operations=[{"op": "contact_resolve", "identifier": "@johnsmith"}])
+contacts(operations=[{"op": "contact_resolve", "identifier": "jsmith@adb.org"}])
+```
+
+### Channel Types
+
+| Type | Description |
+|------|-------------|
+| `email` | Email address |
+| `phone` | Phone number with country code |
+| `telegram_username` | Telegram @username |
+| `telegram_chat_id` | Telegram numeric chat ID (for sending) |
+| `telegram_id` | Telegram user ID |
+| `teams_chat_id` | Microsoft Teams chat ID |
+| `whatsapp` | WhatsApp number |
+| `linkedin` | LinkedIn profile URL |
+| `skype` | Skype username |
+
+### Role Codes
+
+Standard roles organized by category:
+
+**Consultant**: TL (Team Leader), DTL (Deputy TL), SE (Senior Expert), JE (Junior Expert), NKE (National Expert), PM (Project Manager)
+
+**Client**: CPM (Client PM), CFP (Client Focal Point), CC (Client Counterpart)
+
+**Donor**: DO (Donor Officer), DPM (Donor PM), DF (Donor Focal)
+
+**Partner**: PP (Partner PM), PC (Partner Contact), LB (Local Bank)
+
+### Reports and Export
+
+```python
+# Summary report
+contacts(operations=[{"op": "report", "report_type": "summary"}])
+
+# Project team roster
+contacts(operations=[{"op": "report", "report_type": "project_team", "project_id": 1}])
+
+# Contacts by organization
+contacts(operations=[{"op": "report", "report_type": "organization", "organization": "ADB"}])
+
+# Export to Excel
+contacts(operations=[{"op": "export_contacts"}])
+contacts(operations=[{"op": "export_contacts", "filter_params": {"country": "Kyrgyzstan"}}])
+contacts(operations=[{"op": "export_project_team", "project_id": 1}])
+```
+
+### Enrichment from Other Tools
+
+The contacts module integrates with Telegram, Teams, and Gmail MCP servers:
+
+```python
+# Get enrichment suggestions for a contact
+contacts(operations=[{"op": "suggest_enrichment", "contact_id": 1}])
+# Returns instructions to find telegram_chat_id, teams_chat_id, phone from signatures
+
+# Scan communication channels for new contacts
+contacts(operations=[{"op": "suggest_new_contacts", "period": "month", "sources": ["telegram", "gmail"]}])
+# Returns scan instructions for Claude to execute
+```
+
+## Multi-Account Usage
+
+When user mentions calendar names ("личный календарь", "work calendar", "family"):
+
+1. First call `manage_settings(action="list_accounts")` to see available accounts
+2. Match user's description to account name
+3. Pass `account="matched_name"` in subsequent calls
+
+```python
+# Wrong: assumes default account
+list_events(period="today")
+
+# Correct: explicit account selection
+list_events(period="today", account="personal")
+```
+
+**Account vs Calendar**:
+- **Account** = Google account (work@company.com, personal@gmail.com). Parameter: `account="work"`
+- **Calendar** = Calendar within account (primary, holidays, family). Parameter: `calendar_id="holidays"`
+
+## Examples
+
+### Create Meeting with Attendees
+
+```python
+create_event(
+    summary="Project Kickoff",
+    start="2025-01-15T10:00:00",
+    end="2025-01-15T11:30:00",
+    attendees=["client@company.com", "team@bfc.com"],
+    add_meet_link=True,
+    account="work"
+)
+```
+
+### Find Meeting Slots Across Timezones
+
+```python
 find_meeting_slots(
     duration_minutes=60,
-    date_range_start="2025-01-15",
-    date_range_end="2025-01-17",
-    timezone="Asia/Bangkok",
-    participant_timezones=["Europe/London"],
+    date_range_start="2025-01-20",
+    date_range_end="2025-01-24",
+    participant_timezones=["Asia/Bangkok", "Europe/Berlin"],
     working_hours_start=9,
     working_hours_end=17
 )
 ```
 
-Returns slots that work for all participant timezones within specified working hours.
+### Update Recurring Event (All Instances)
 
-### weekly_brief
+```python
+update_event(
+    event_id="abc123",
+    summary="Updated Weekly Standup",
+    scope="all"  # Applies to entire series
+)
+```
 
-Synthesized weekly overview: total hours, busiest day, free days, conflicts.
+### Move Event to Another Calendar
 
-### Reference Tools
+```python
+# First, get calendar list
+manage_calendars(action="list")
 
-- `list_calendars`: Show all accessible calendars
-- `list_colors`: Available event colors
-- `manage_settings`: Get/update settings or list accounts (action="get"|"set_timezone"|"list_accounts")
+# Then move event
+update_event(
+    event_id="abc123",
+    destination_calendar_id="calendar_id_from_list"
+)
+```
 
----
+### Time Tracking Workflow
 
-## Multi-Account
+```python
+# 1. Check current status
+time_tracking_report(report_type="status")
+
+# 2. See what projects are available
+time_tracking(operations=[{"op": "project_list_active"}])
+
+# 3. Create properly tagged event
+create_event(
+    summary="[CAYIB:P1] Inception workshop",
+    start="2025-01-15T09:00:00",
+    end="2025-01-15T17:00:00"
+)
+
+# 4. Generate weekly report
+time_tracking_report(report_type="week")
+```
+
+## Development
+
+### Setup Development Environment
 
 ```bash
-python -m google_calendar auth        # → name it "work"
-python -m google_calendar auth        # → name it "personal"
-python -m google_calendar auth --list
-python -m google_calendar auth --default work
+# Install with dev dependencies
+pip install -e ".[dev]"
+
+# Run tests
+pytest
+
+# Lint code
+ruff check src/
 ```
 
-Specify `account` parameter when needed:
+### Project Structure
 
 ```
-"Show events from personal calendar"
+src/google_calendar/
+├── __init__.py
+├── __main__.py          # CLI entry point
+├── server.py            # FastMCP server definition
+├── api/                 # Google Calendar API wrapper
+├── cli/                 # Command-line interface
+├── tools/
+│   ├── crud/            # Core CRUD operations
+│   ├── reference/       # Calendar, colors, settings
+│   ├── attendees/       # Attendee management
+│   ├── intelligence/    # Batch, slots, briefing
+│   ├── time_tracking/   # Time tracking module
+│   └── contacts/        # Contacts module
+└── utils/
+    ├── config.py        # Configuration management
+    └── auth.py          # OAuth handling
 ```
 
----
+### Adding New Tools
 
-## CLI Reference
-
-```bash
-# Account management
-python -m google_calendar auth              # Add account
-python -m google_calendar auth --list       # Show accounts
-python -m google_calendar auth --default X  # Set default
-python -m google_calendar auth --remove X   # Remove account
-
-# Installation
-python -m google_calendar install           # Install to Claude Desktop
-python -m google_calendar install --force   # Reinstall
-python -m google_calendar install --dev     # Dev mode
-python -m google_calendar install --remove  # Uninstall
-
-# Time tracking
-python -m google_calendar time-tracking enable
-python -m google_calendar time-tracking disable
-python -m google_calendar time-tracking status
-python -m google_calendar time-tracking init
-
-# Debug
-python -m google_calendar serve             # Run server directly
-```
-
----
-
-## Data Storage
-
-```
-~/.mcp/google-calendar/
-├── config.json          # Account registry, feature flags
-├── oauth_client.json    # Google OAuth credentials
-├── time_tracking.db     # Time tracking database (if enabled)
-├── reports/             # Generated Excel reports
-├── tokens/
-│   ├── work.json
-│   └── personal.json
-├── src/                 # Package (standalone mode)
-└── venv/                # Virtual environment (standalone mode)
-```
-
----
-
-## Troubleshooting
-
-**"Calendar API has not been used in project X"**
-Enable Calendar API in Google Cloud Console.
-
-**Server not appearing in Claude**
-1. Check accounts: `python -m google_calendar auth --list`
-2. Verify config: `cat ~/Library/Application\ Support/Claude/claude_desktop_config.json`
-3. Restart Claude Desktop
-
-**Time tracking tools not showing**
-1. Enable: `python -m google_calendar time-tracking enable`
-2. Restart Claude Desktop
-
-**Token expired**
-Re-run `python -m google_calendar auth` with same account name.
-
----
+1. Create tool function with docstring (used for LLM instructions)
+2. Register in `server.py` using `mcp.tool(function)`
+3. Add tests in `tests/`
 
 ## License
 
-MIT
+MIT License. See [LICENSE](LICENSE) for details.
+
+## Author
+
+Dmytro Romanov
+
+## Links
+
+- Repository: https://github.com/DimaRmnv/G-calendar-mcp
+- MCP Protocol: https://modelcontextprotocol.io/
+- FastMCP: https://github.com/jlowin/fastmcp
