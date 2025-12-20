@@ -19,6 +19,13 @@ from google_calendar.tools.contacts.lookup import (
     resolve_contact,
     resolve_multiple,
     get_preferred_channel,
+    suggest_enrichment,
+    suggest_new_contacts,
+)
+from google_calendar.tools.contacts.report import (
+    contacts_report,
+    export_contacts_excel,
+    export_project_team_excel,
 )
 
 
@@ -145,6 +152,34 @@ OPERATIONS = {
         for_purpose=p.get("for_purpose")
     ),
 
+    # Enrichment operations
+    "suggest_enrichment": lambda p: suggest_enrichment(
+        contact_id=p["contact_id"],
+        sources=p.get("sources")
+    ),
+    "suggest_new_contacts": lambda p: suggest_new_contacts(
+        sources=p.get("sources"),
+        limit=p.get("limit", 20),
+        period=p.get("period", "month")
+    ),
+
+    # Reporting operations
+    "report": lambda p: contacts_report(
+        report_type=p["report_type"],
+        project_id=p.get("project_id"),
+        organization=p.get("organization"),
+        days_stale=p.get("days_stale", 90),
+        limit=p.get("limit", 50)
+    ),
+    "export_contacts": lambda p: export_contacts_excel(
+        filter_params=p.get("filter_params"),
+        output_path=p.get("output_path")
+    ),
+    "export_project_team": lambda p: export_project_team_excel(
+        project_id=p["project_id"],
+        output_path=p.get("output_path")
+    ),
+
     "init": lambda p: _init_contacts(force_reset=p.get("force_reset", False)),
     "status": lambda p: _get_status(),
 }
@@ -190,6 +225,30 @@ async def contacts(operations: list[dict]) -> dict:
                 → Batch resolve with deduplication
             contact_preferred_channel: contact, channel_type?, for_purpose?
                 → Get best channel for contacting
+        
+        Enrichment:
+            suggest_enrichment: contact_id, sources? (telegram, teams, gmail)
+                → Returns instructions for Claude to call other MCP tools
+                   to enrich contact data (find chat IDs, phone from signatures)
+            suggest_new_contacts: sources?, limit?, period? (day/week/month/quarter/year)
+                → Returns instructions for Claude to scan communication channels
+                   and create new contacts from Telegram/Teams chats, Gmail, Calendar
+                → Period controls time depth: today, week, month (default), quarter, year
+                → Limit auto-scales with period for sources without date filtering
+        
+        Reporting:
+            report: report_type, project_id?, organization?, days_stale?, limit?
+                Report types:
+                - summary: Overall contacts database summary
+                - project_team: Full team roster with contacts (requires project_id)
+                - organization: Contacts by organization (optional organization filter)
+                - communication_map: Contact channels summary
+                - stale_contacts: Contacts not updated in X days
+            export_contacts: filter_params?, output_path?
+                → Export contacts to Excel with all channels
+                → filter_params: {organization, organization_type, country, project_id}
+            export_project_team: project_id, output_path?
+                → Export project team roster to Excel
         
         System: init, status
 

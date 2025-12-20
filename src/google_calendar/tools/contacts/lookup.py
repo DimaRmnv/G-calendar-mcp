@@ -382,3 +382,385 @@ def resolve_multiple(
             'duplicate_count': len(duplicates)
         }
     }
+
+
+def suggest_enrichment(
+    contact_id: int,
+    sources: list[str] = None
+) -> dict:
+    """
+    Analyze contact and suggest enrichment actions.
+    
+    Returns instructions for Claude to call other MCP tools
+    (telegram, teams, gmail) to enrich contact data.
+    
+    Args:
+        contact_id: Contact to analyze
+        sources: Limit to specific sources ['telegram', 'teams', 'gmail']
+                 Default: all available
+    
+    Returns:
+        Dict with:
+        - contact_id: Contact ID
+        - contact_name: Display name
+        - suggestions: List of enrichment instructions
+        - already_complete: List of channels that don't need enrichment
+    
+    Each suggestion contains:
+        - type: What will be added (e.g., 'telegram_chat_id')
+        - reason: Why this enrichment is suggested
+        - tool: MCP tool to call (e.g., 'telegram:search')
+        - params: Parameters for the tool call
+        - extract: JSONPath to extract value from result
+        - save_as: channel_type to save as
+    
+    Example workflow for Claude:
+        1. Call suggest_enrichment(contact_id=1)
+        2. For each suggestion, call the specified tool with params
+        3. Extract value using the extract path
+        4. Call channel_add(contact_id, channel_type=save_as, channel_value=extracted)
+    """
+    contact = _get_contact_with_channels(contact_id)
+    if not contact:
+        return {"error": f"Contact {contact_id} not found"}
+    
+    if sources is None:
+        sources = ['telegram', 'teams', 'gmail']
+    
+    # Build channel lookup
+    channels_by_type = {}
+    for ch in contact.get('channels', []):
+        channels_by_type[ch['channel_type']] = ch['channel_value']
+    
+    suggestions = []
+    already_complete = []
+    
+    # --- TELEGRAM ---
+    if 'telegram' in sources:
+        has_username = channels_by_type.get('telegram_username')
+        has_chat_id = channels_by_type.get('telegram_chat_id')
+        has_user_id = channels_by_type.get('telegram_id')
+        
+        if has_username and not has_chat_id:
+            suggestions.append({
+                'type': 'telegram_chat_id',
+                'reason': f'Has telegram_username (@{has_username}) but no chat_id for sending messages',
+                'tool': 'telegram:search',
+                'params': {
+                    'query': has_username,
+                    'type': 'contacts',
+                    'limit': 5
+                },
+                'extract': 'contacts[0].id',
+                'extract_hint': 'Find contact where username matches, take id field',
+                'save_as': 'telegram_chat_id'
+            })
+        
+        # telegram_id (user_id) - for private chats same as chat_id
+        if has_chat_id and not has_user_id:
+            suggestions.append({
+                'type': 'telegram_id',
+                'reason': f'Has telegram_chat_id ({has_chat_id}) but no telegram_id (user_id)',
+                'action': 'copy',
+                'note': 'For private chats, user_id == chat_id. Copy the value.',
+                'source_channel': 'telegram_chat_id',
+                'save_as': 'telegram_id'
+            })
+        
+        # Read recent messages for context
+        chat_id_for_messages = has_chat_id or has_user_id
+        if chat_id_for_messages:
+            suggestions.append({
+                'type': 'telegram_recent_messages',
+                'reason': f'Read recent messages to understand context with this contact',
+                'tool': 'telegram:read_chat',
+                'params': {
+                    'chat': int(chat_id_for_messages),
+                    'limit': 20
+                },
+                'action': 'context',
+                'extract_hint': 'Review messages for additional contact info (phone, email in text)'
+            })
+        
+        # Complete when has all three
+        if has_username and has_chat_id and has_user_id:
+            already_complete.append('telegram')
+    
+    # --- TEAMS ---
+    if 'teams' in sources:
+        has_email = channels_by_type.get('email')
+        has_teams_chat = channels_by_type.get('teams_chat_id')
+        
+        if has_email and not has_teams_chat:
+            suggestions.append({
+                'type': 'teams_chat_id',
+                'reason': f'Has email ({has_email}) but no Teams chat_id for messaging',
+                'tool': 'teams:chats',
+                'params': {
+                    'action': 'search',
+                    'query': has_email,
+                    'limit': 5
+                },
+                'extract': 'chats[0].id',
+                'extract_hint': 'Find 1:1 chat with this person, take id field',
+                'save_as': 'teams_chat_id'
+            })
+        elif has_teams_chat:
+            already_complete.append('teams')
+        
+        # Also try by name if no email
+        if not has_email and not has_teams_chat:
+            display_name = contact.get('display_name')
+            if display_name:
+                suggestions.append({
+                    'type': 'teams_chat_id',
+                    'reason': f'No email, searching Teams by name ({display_name})',
+                    'tool': 'teams:chats',
+                    'params': {
+                        'action': 'search',
+                        'query': display_name,
+                        'limit': 5
+                    },
+                    'extract': 'chats[0].id',
+                    'extract_hint': 'Find 1:1 chat matching name, take id field',
+                    'save_as': 'teams_chat_id'
+                })
+    
+    # --- GMAIL (future: extract signature info) ---
+    if 'gmail' in sources:
+        has_email = channels_by_type.get('email')
+        has_phone = channels_by_type.get('phone')
+        
+        # If has email but missing phone/other info, could scan signatures
+        if has_email and not has_phone:
+            suggestions.append({
+                'type': 'phone_from_signature',
+                'reason': f'Has email ({has_email}), can extract phone from email signatures',
+                'tool': 'google-mail:find_context',
+                'params': {
+                    'topic': has_email,
+                    'max_results': 10
+                },
+                'extract': 'manual',
+                'extract_hint': 'Look for phone numbers in email signatures from this sender',
+                'save_as': 'phone'
+            })
+    
+    return {
+        'contact_id': contact_id,
+        'contact_name': contact.get('display_name'),
+        'current_channels': list(channels_by_type.keys()),
+        'suggestions': suggestions,
+        'already_complete': already_complete,
+        'suggestion_count': len(suggestions)
+    }
+
+
+def suggest_new_contacts(
+    sources: list[str] = None,
+    limit: int = 20,
+    period: str = 'month'
+) -> dict:
+    """
+    Suggest new contacts from communication channels.
+    
+    Returns instructions for Claude to scan Telegram chats, Teams chats,
+    Gmail correspondents, and Calendar attendees to find people not yet
+    in the contacts database.
+    
+    Args:
+        sources: Which sources to scan ['telegram', 'teams', 'gmail', 'calendar']
+                 Default: all available
+        limit: Max suggestions per source (base limit, auto-scaled by period)
+        period: Time period to scan:
+                - 'day' or 'today': Last 24 hours
+                - 'week': Last 7 days  
+                - 'month': Last 30 days (default)
+                - 'quarter' or '3months': Last 90 days
+                - 'year': Last 365 days
+                Note: Telegram/Teams don't support date filtering, so limit is
+                      auto-increased for longer periods.
+    
+    Returns:
+        Dict with scan instructions for each source.
+        Claude should execute these, then call contact_add for new contacts.
+    
+    Workflow:
+        1. Claude calls suggest_new_contacts()
+        2. Claude executes each scan instruction
+        3. For each result, Claude checks if contact exists (contact_resolve)
+        4. If not exists, Claude calls contact_add + channel_add
+    """
+    if sources is None:
+        sources = ['telegram', 'teams', 'gmail', 'calendar']
+    
+    # Normalize period
+    period_map = {
+        'day': 'today',
+        'today': 'today',
+        'week': 'week',
+        'month': 'month',
+        'quarter': 'quarter',
+        '3months': 'quarter',
+        'year': 'year'
+    }
+    period = period_map.get(period.lower(), 'month')
+    
+    # Auto-scale limit for sources without date filtering (Telegram, Teams)
+    # Longer period = need more chats to cover timeframe
+    limit_multiplier = {
+        'today': 1,
+        'week': 2,
+        'month': 3,
+        'quarter': 5,
+        'year': 10
+    }
+    scaled_limit = min(limit * limit_multiplier.get(period, 3), 100)  # Cap at 100
+    
+    # Gmail/Calendar period mapping
+    gmail_period = 'month' if period in ('quarter', 'year') else period
+    # Note: Gmail analyze_inbox only supports today/week/month
+    # For quarter/year, we'll use month and note limitation
+    
+    # Calendar uses time_min/time_max for precise control
+    from datetime import datetime, timedelta
+    now = datetime.now()
+    period_days = {
+        'today': 1,
+        'week': 7,
+        'month': 30,
+        'quarter': 90,
+        'year': 365
+    }
+    days_back = period_days.get(period, 30)
+    time_min = (now - timedelta(days=days_back)).strftime('%Y-%m-%dT00:00:00')
+    
+    scans = []
+    
+    # --- TELEGRAM ---
+    if 'telegram' in sources:
+        scans.append({
+            'source': 'telegram',
+            'description': f'Scan recent Telegram chats ({period}, limit {scaled_limit})',
+            'tool': 'telegram:list_chats',
+            'params': {
+                'limit': scaled_limit,
+                'filter': 'private'  # Only 1:1 chats, not groups
+            },
+            'extract_fields': {
+                'user_id': 'chats[].id',  # Same as chat_id for private chats
+                'name': 'chats[].name',
+                'username': 'chats[].username',
+                'phone': 'chats[].phone'
+            },
+            'create_contact': {
+                'channels_to_add': [
+                    {'type': 'telegram_id', 'value_from': 'id', 'note': 'User ID'},
+                    {'type': 'telegram_chat_id', 'value_from': 'id', 'note': 'Same as user_id for private'},
+                    {'type': 'telegram_username', 'value_from': 'username', 'if_present': True}
+                ],
+                'first_name_from': 'name',
+                'note': 'For private chats, user_id == chat_id'
+            },
+            'period_note': 'Telegram API has no date filter; using increased limit to cover period'
+        })
+    
+    # --- TEAMS ---
+    if 'teams' in sources:
+        scans.append({
+            'source': 'teams',
+            'description': f'Scan recent Teams 1:1 chats ({period}, limit {scaled_limit})',
+            'tool': 'teams:chats',
+            'params': {
+                'action': 'list',
+                'filter': 'oneOnOne',
+                'limit': scaled_limit
+            },
+            'extract_fields': {
+                'chat_id': 'chats[].id',
+                'name': 'chats[].name'
+            },
+            'create_contact': {
+                'channels_to_add': [
+                    {'type': 'teams_chat_id', 'value_from': 'id'}
+                ],
+                'first_name_from': 'name',
+                'enrichment_step': 'Call manage_chat(action="info", chat_id=id) to get email'
+            },
+            'period_note': 'Teams API has no date filter; using increased limit to cover period'
+        })
+    
+    # --- GMAIL ---
+    if 'gmail' in sources:
+        gmail_note = None
+        if period in ('quarter', 'year'):
+            gmail_note = f'Gmail analyze_inbox max period is month; requested {period}. Consider multiple calls or search_emails with date range.'
+        
+        scans.append({
+            'source': 'gmail',
+            'description': f'Scan email correspondents ({gmail_period})',
+            'tool': 'google-mail:analyze_inbox',
+            'params': {
+                'period': gmail_period
+            },
+            'extract_fields': {
+                'email': 'top_senders[].email',
+                'name': 'top_senders[].name',
+                'count': 'top_senders[].count'
+            },
+            'create_contact': {
+                'channels_to_add': [
+                    {'type': 'email', 'value_from': 'email', 'is_primary': True}
+                ],
+                'first_name_from': 'name',
+                'enrichment_step': 'Check signatures via find_context for phone'
+            },
+            'period_note': gmail_note
+        })
+    
+    # --- CALENDAR ---
+    if 'calendar' in sources:
+        # Calendar supports precise time_min for any period
+        cal_max_results = min(50 * limit_multiplier.get(period, 3), 250)
+        
+        scans.append({
+            'source': 'calendar',
+            'description': f'Scan meeting attendees ({period}, last {days_back} days)',
+            'tool': 'google-calendar:list_events',
+            'params': {
+                'time_min': time_min,
+                'max_results': cal_max_results
+            },
+            'post_process': 'For each event with attendees>0, call get_event to get attendees list',
+            'extract_fields': {
+                'email': 'attendees[].email',
+                'name': 'attendees[].displayName',
+                'response': 'attendees[].responseStatus'
+            },
+            'create_contact': {
+                'channels_to_add': [
+                    {'type': 'email', 'value_from': 'email', 'is_primary': True}
+                ],
+                'first_name_from': 'displayName',
+                'skip_conditions': ['Skip self email', 'Deduplicate across events']
+            },
+            'period_note': f'Calendar supports exact date range: {time_min} to now'
+        })
+    
+    return {
+        'scans': scans,
+        'scan_count': len(scans),
+        'period': period,
+        'period_days': days_back,
+        'scaled_limit': scaled_limit,
+        'workflow': [
+            '1. Execute each scan tool with params',
+            '2. For each person found, call contact_resolve(email or name)',
+            '3. If not found (null), create new contact:',
+            '   - contact_add(first_name, last_name, ...)',
+            '   - channel_add(contact_id, channel_type, channel_value)',
+            '4. Return summary of new contacts created'
+        ],
+        'deduplication_note': 'Always check contact_resolve before creating to avoid duplicates',
+        'retry_hint': 'If not enough results, retry with period="quarter" or period="year"'
+    }
