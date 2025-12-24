@@ -153,11 +153,31 @@ async def project_delete(id: int) -> bool:
 
 
 async def project_list_active() -> list[dict]:
-    """Get active projects with their phases and tasks."""
+    """Get active projects with their phases and tasks.
+
+    Returns projects with:
+        - phases: list of phases, each with nested 'tasks' for phase-linked tasks
+        - universal_tasks: tasks linked directly to project (phase_id=null)
+        - format: event summary format based on structure_level
+
+    Task organization:
+        - Phase-linked tasks appear under their respective phase['tasks']
+        - Universal tasks (project_id set, phase_id null) appear in project['universal_tasks']
+    """
     projects = await project_list(active_only=True)
     for project in projects:
-        project["phases"] = await phase_list(project_id=project["id"])
-        project["tasks"] = await task_list(project_id=project["id"])
+        # Get phases with their tasks
+        phases = await phase_list(project_id=project["id"])
+        for phase in phases:
+            phase_tasks = await task_list(phase_id=phase["id"])
+            phase["tasks"] = phase_tasks
+        project["phases"] = phases
+
+        # Get universal tasks (linked to project, not to phase)
+        all_tasks = await task_list(project_id=project["id"], include_universal=True)
+        project["universal_tasks"] = [t for t in all_tasks if t.get("phase_id") is None]
+
+        # Format hint for calendar events
         if project["structure_level"] == 1:
             project["format"] = "PROJECT * Description"
         elif project["structure_level"] == 2:
@@ -252,18 +272,58 @@ async def phase_delete(id: int) -> bool:
 # Tasks CRUD
 # =============================================================================
 
-async def task_add(phase_id: int, code: str, description: Optional[str] = None) -> dict:
-    """Create a new task for a phase. Tasks are linked to phases, not directly to projects."""
+async def task_add(
+    code: str,
+    description: Optional[str] = None,
+    phase_id: Optional[int] = None,
+    project_id: Optional[int] = None
+) -> dict:
+    """Create a new task.
+
+    Two modes:
+        - phase_id set → task linked to specific phase
+        - project_id set, phase_id null → universal task for all phases of project
+
+    Args:
+        code: Task code (will be uppercased)
+        description: Task description
+        phase_id: Link to specific phase (mutually exclusive with project_id)
+        project_id: Link to project for universal task (mutually exclusive with phase_id)
+
+    Returns:
+        Created task dict
+
+    Raises:
+        ValueError: If neither or both phase_id and project_id are provided
+    """
+    if (phase_id is None) == (project_id is None):
+        raise ValueError("Exactly one of phase_id or project_id must be provided")
+
     async with get_db() as conn:
         row = await conn.fetchrow(
-            "INSERT INTO tasks (phase_id, code, description) VALUES ($1, $2, $3) RETURNING id",
-            phase_id, code.upper(), description
+            "INSERT INTO tasks (phase_id, project_id, code, description) VALUES ($1, $2, $3, $4) RETURNING id",
+            phase_id, project_id, code.upper(), description
         )
         return await task_get(id=row['id'])
 
 
-async def task_get(id: Optional[int] = None, phase_id: Optional[int] = None, code: Optional[str] = None) -> Optional[dict]:
-    """Get task by id or by phase_id + code."""
+async def task_get(
+    id: Optional[int] = None,
+    phase_id: Optional[int] = None,
+    project_id: Optional[int] = None,
+    code: Optional[str] = None
+) -> Optional[dict]:
+    """Get task by id, by phase_id + code, or by project_id + code.
+
+    Args:
+        id: Task ID (takes precedence)
+        phase_id: Phase ID (used with code for phase-linked tasks)
+        project_id: Project ID (used with code for universal tasks)
+        code: Task code
+
+    Returns:
+        Task dict or None if not found
+    """
     async with get_db() as conn:
         if id is not None:
             row = await conn.fetchrow("SELECT * FROM tasks WHERE id = $1", id)
@@ -272,13 +332,33 @@ async def task_get(id: Optional[int] = None, phase_id: Optional[int] = None, cod
                 "SELECT * FROM tasks WHERE phase_id = $1 AND code = $2",
                 phase_id, code.upper()
             )
+        elif project_id is not None and code is not None:
+            row = await conn.fetchrow(
+                "SELECT * FROM tasks WHERE project_id = $1 AND phase_id IS NULL AND code = $2",
+                project_id, code.upper()
+            )
         else:
             return None
         return dict(row) if row else None
 
 
-async def task_list(phase_id: Optional[int] = None, project_id: Optional[int] = None) -> list[dict]:
-    """List tasks, optionally filtered by phase or project (via phases)."""
+async def task_list(
+    phase_id: Optional[int] = None,
+    project_id: Optional[int] = None,
+    include_universal: bool = True
+) -> list[dict]:
+    """List tasks, optionally filtered by phase or project.
+
+    Args:
+        phase_id: Filter by specific phase
+        project_id: Filter by project (includes phase-linked and universal tasks)
+        include_universal: When filtering by project, include universal tasks (default True)
+
+    Returns:
+        List of task dicts. For project filter, returns both:
+        - Phase-linked tasks (via phases table)
+        - Universal project tasks (project_id set, phase_id null)
+    """
     async with get_db() as conn:
         if phase_id is not None:
             rows = await conn.fetch(
@@ -286,24 +366,49 @@ async def task_list(phase_id: Optional[int] = None, project_id: Optional[int] = 
                 phase_id
             )
         elif project_id is not None:
-            rows = await conn.fetch(
-                """
-                SELECT t.* FROM tasks t
-                JOIN phases p ON t.phase_id = p.id
-                WHERE p.project_id = $1
-                ORDER BY p.code, t.code
-                """,
-                project_id
-            )
+            if include_universal:
+                # Both phase-linked and universal tasks
+                rows = await conn.fetch(
+                    """
+                    SELECT t.*, p.code as phase_code FROM tasks t
+                    LEFT JOIN phases p ON t.phase_id = p.id
+                    WHERE p.project_id = $1 OR (t.project_id = $1 AND t.phase_id IS NULL)
+                    ORDER BY COALESCE(p.code, ''), t.code
+                    """,
+                    project_id
+                )
+            else:
+                # Only phase-linked tasks
+                rows = await conn.fetch(
+                    """
+                    SELECT t.*, p.code as phase_code FROM tasks t
+                    JOIN phases p ON t.phase_id = p.id
+                    WHERE p.project_id = $1
+                    ORDER BY p.code, t.code
+                    """,
+                    project_id
+                )
         else:
-            rows = await conn.fetch("SELECT * FROM tasks ORDER BY phase_id, code")
+            rows = await conn.fetch("SELECT * FROM tasks ORDER BY COALESCE(phase_id, 0), code")
         return [dict(row) for row in rows]
 
 
 async def task_update(id: int, **kwargs) -> Optional[dict]:
-    """Update task by id. Can move task to different phase via phase_id."""
-    allowed_fields = {"code", "description", "phase_id"}
-    updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
+    """Update task by id.
+
+    Can change task binding:
+        - Set phase_id (and project_id=None) → link to specific phase
+        - Set project_id (and phase_id=None) → make universal for project
+
+    Args:
+        id: Task ID
+        **kwargs: Fields to update (code, description, phase_id, project_id)
+
+    Returns:
+        Updated task dict or None if not found
+    """
+    allowed_fields = {"code", "description", "phase_id", "project_id"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed_fields}
 
     if not updates:
         return await task_get(id=id)

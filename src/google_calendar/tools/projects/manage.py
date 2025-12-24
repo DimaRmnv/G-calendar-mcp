@@ -93,17 +93,27 @@ async def _execute_operation(op: str, p: dict) -> dict:
         deleted = await phase_delete(id=p["id"])
         return {"deleted": deleted}
 
-    # Tasks (v2: linked to phases)
+    # Tasks (linked to phases or universal for project)
     elif op == "task_add":
         return await task_add(
-            phase_id=p["phase_id"],
             code=p["code"],
-            description=p.get("description")
+            description=p.get("description"),
+            phase_id=p.get("phase_id"),
+            project_id=p.get("project_id")
         )
     elif op == "task_get":
-        return await task_get(id=p.get("id"), phase_id=p.get("phase_id"), code=p.get("code"))
+        return await task_get(
+            id=p.get("id"),
+            phase_id=p.get("phase_id"),
+            project_id=p.get("project_id"),
+            code=p.get("code")
+        )
     elif op == "task_list":
-        tasks = await task_list(phase_id=p.get("phase_id"), project_id=p.get("project_id"))
+        tasks = await task_list(
+            phase_id=p.get("phase_id"),
+            project_id=p.get("project_id"),
+            include_universal=p.get("include_universal", True)
+        )
         return {"tasks": tasks}
     elif op == "task_update":
         return await task_update(id=p["id"], **{k: v for k, v in p.items() if k != "id"})
@@ -257,13 +267,25 @@ async def projects(operations: list[dict]) -> dict:
 
     Batch operations via operations=[{op, ...params}].
 
-    Hierarchy: PROJECT → PHASE → TASK (tasks link to phases, not projects)
+    TASK HIERARCHY:
+        Tasks can be linked in two ways:
+        1. Phase-linked: task has phase_id → appears in phase["tasks"]
+        2. Universal: task has project_id (phase_id=null) → appears in project["universal_tasks"]
+
+        project_list_active returns:
+        {
+            "phases": [
+                {"code": "A", "tasks": [{"code": "T1", ...}]},  # Phase-linked tasks
+                {"code": "B", "tasks": [...]}
+            ],
+            "universal_tasks": [{"code": "GEN", ...}]  # Universal tasks for all phases
+        }
 
     OPERATION GROUPS:
         Projects: project_add, project_get, project_list, project_list_active, project_update,
                   project_delete, project_activate, project_deactivate
         Phases: phase_add, phase_get, phase_list, phase_update, phase_delete
-        Tasks: task_add, task_get, task_list, task_update, task_delete
+        Tasks: task_add (phase_id OR project_id), task_get, task_list, task_update, task_delete
         Organizations: org_add, org_get, org_list, org_update, org_delete, org_search
         Project-Org Links: project_org_add/get/list/update/delete, project_orgs, org_projects
         Norms: norm_add, norm_get, norm_list, norm_delete
@@ -272,8 +294,8 @@ async def projects(operations: list[dict]) -> dict:
 
     Examples:
         projects(operations=[{"op": "project_list_active"}])
-        projects(operations=[{"op": "project_get", "code": "CAYIB"}])
-        projects(operations=[{"op": "phase_list", "project_id": 1}])
+        projects(operations=[{"op": "task_add", "phase_id": 1, "code": "T1"}])  # Phase-linked
+        projects(operations=[{"op": "task_add", "project_id": 1, "code": "GEN"}])  # Universal
     """
     # Check database exists (async)
     db_exists = await database_exists()

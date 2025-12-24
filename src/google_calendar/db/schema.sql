@@ -109,20 +109,32 @@ CREATE TABLE IF NOT EXISTS phases (
 CREATE INDEX IF NOT EXISTS idx_phases_project ON phases(project_id);
 
 -- =============================================================================
--- TASKS (Linked to PHASES, not projects)
+-- TASKS
+-- Two modes:
+--   1. phase_id set → task linked to specific phase
+--   2. project_id set, phase_id null → universal task for all phases of project
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS tasks (
     id SERIAL PRIMARY KEY,
-    phase_id INTEGER NOT NULL REFERENCES phases(id) ON DELETE CASCADE,
+    phase_id INTEGER REFERENCES phases(id) ON DELETE CASCADE,
+    project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
     code TEXT NOT NULL,
     description TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(phase_id, code)
+    -- Either phase_id or project_id must be set
+    CONSTRAINT tasks_parent_check CHECK (
+        (phase_id IS NOT NULL AND project_id IS NULL) OR
+        (phase_id IS NULL AND project_id IS NOT NULL)
+    ),
+    -- Unique code within phase or within project (for universal tasks)
+    UNIQUE(phase_id, code),
+    UNIQUE(project_id, code)
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_phase ON tasks(phase_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
 
 -- =============================================================================
 -- NORMS, EXCLUSIONS, SETTINGS
