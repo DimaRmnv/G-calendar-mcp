@@ -153,7 +153,7 @@ def run_database_migrations(venv_python: Path, src_dir: Path) -> None:
     env = {**dict(subprocess.os.environ), "PYTHONPATH": str(src_dir)}
     subprocess.run(
         [str(venv_python), "-c",
-         "from google_calendar.tools.time_tracking.database import ensure_database; ensure_database()"],
+         "from google_calendar.tools.projects.database import ensure_database; ensure_database()"],
         check=True,
         capture_output=True,
         env=env

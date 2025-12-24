@@ -18,7 +18,7 @@ from typing import Optional
 from dataclasses import dataclass
 from datetime import datetime
 
-from google_calendar.tools.time_tracking.database import (
+from google_calendar.tools.projects.database import (
     get_projects_by_code,
     phase_get,
     task_get,

@@ -64,8 +64,8 @@ def run_time_tracking_command(args: list[str]) -> int:
     
     elif command == "init":
         # Initialize database directly from CLI
-        from google_calendar.tools.time_tracking.database import database_exists, init_database
-        from google_calendar.tools.time_tracking.init import populate_default_data
+        from google_calendar.tools.projects.database import database_exists, init_database
+        from google_calendar.tools.projects.init import populate_default_data
 
         db_path = get_app_dir() / "time_tracking.db"
 
