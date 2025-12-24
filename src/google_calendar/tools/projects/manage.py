@@ -268,28 +268,19 @@ async def _execute_operation(op: str, p: dict) -> dict:
             result = await conn.execute("DELETE FROM project_roles WHERE role_code = $1", p["role_code"].upper())
             return {"deleted": result != "DELETE 0"}
 
-    # Reports
+    # Reports (always generate Excel with download_url)
     elif op == "report_status":
         return await generate_report(report_type="status", account=p.get("account"))
     elif op == "report_week":
-        return await generate_report(
-            report_type="week",
-            account=p.get("account"),
-            export_file=p.get("export_file", False)
-        )
+        return await generate_report(report_type="week", account=p.get("account"))
     elif op == "report_month":
-        return await generate_report(
-            report_type="month",
-            account=p.get("account"),
-            export_file=p.get("export_file", False)
-        )
+        return await generate_report(report_type="month", account=p.get("account"))
     elif op == "report_custom":
         return await generate_report(
             report_type="custom",
             start_date=p.get("start_date"),
             end_date=p.get("end_date"),
-            account=p.get("account"),
-            export_file=p.get("export_file", False)
+            account=p.get("account")
         )
 
     # Export cleanup (TTL = 1 hour)
@@ -369,7 +360,7 @@ async def projects(operations: list[dict]) -> dict:
         Roles: role_add, role_get, role_list, role_update, role_delete
         Norms: norm_add, norm_get, norm_list, norm_delete
         Reports: report_status, report_week, report_month, report_custom
-            → export_file=true: returns download_url for Excel (TTL=1h)
+            → always returns download_url for Excel (TTL=1h)
         Export: cleanup_exports - delete expired files
         System: init, config_get, config_set, config_list, exclusion_*
 

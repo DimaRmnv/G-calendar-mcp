@@ -289,7 +289,6 @@ async def generate_report(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     account: Optional[str] = None,
-    export_file: bool = False,
 ) -> dict:
     """
     Generate project report.
@@ -299,12 +298,10 @@ async def generate_report(
         start_date: Start date for custom (YYYY-MM-DD)
         end_date: End date for custom (YYYY-MM-DD)
         account: Google account name
-        export_file: If True, generate Excel file and return download URL (TTL=1h)
 
     Returns:
         For status: week/month summaries with on-track percentages
-        For reports: summary + error_records + entries (JSON)
-        If export_file=True: summary + download_url + expires_in + filename
+        For reports: summary + error_records + download_url (Excel, TTL=1h)
     """
     await ensure_database()
 
@@ -453,41 +450,31 @@ async def generate_report(
 
     error_records = _get_error_records(entries)
 
-    # Export to Excel file if requested
-    if export_file:
-        file_uuid = uuid.uuid4().hex
-        filename = f"report_{start.strftime('%Y%m%d')}_{end.strftime('%Y%m%d')}.xlsx"
-        file_path = Path("/data/reports") / f"{file_uuid}.xlsx"
+    # Generate Excel file
+    file_uuid = uuid.uuid4().hex
+    filename = f"report_{start.strftime('%Y%m%d')}_{end.strftime('%Y%m%d')}.xlsx"
+    file_path = Path("/data/reports") / f"{file_uuid}.xlsx"
 
-        # Create Excel file
-        _create_excel_file(entries, file_path, base_location, report_type)
+    # Create Excel file
+    _create_excel_file(entries, file_path, base_location, report_type)
 
-        # Record in database (TTL = 1 hour)
-        expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
-        async with get_db() as conn:
-            await conn.execute(
-                """
-                INSERT INTO export_files (uuid, filename, file_path, expires_at)
-                VALUES ($1, $2, $3, $4)
-                """,
-                file_uuid, filename, str(file_path), expires_at
-            )
+    # Record in database (TTL = 1 hour)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+    async with get_db() as conn:
+        await conn.execute(
+            """
+            INSERT INTO export_files (uuid, filename, file_path, expires_at)
+            VALUES ($1, $2, $3, $4)
+            """,
+            file_uuid, filename, str(file_path), expires_at
+        )
 
-        download_url = f"{EXPORT_BASE_URL}/export/{file_uuid}"
-
-        return {
-            "summary": summary,
-            "error_records": error_records,
-            "download_url": download_url,
-            "expires_in": "1 hour",
-            "filename": filename,
-        }
-
-    # Return JSON entries
-    entries_data = await _entries_to_json(entries, base_location)
+    download_url = f"{EXPORT_BASE_URL}/export/{file_uuid}"
 
     return {
         "summary": summary,
         "error_records": error_records,
-        "entries": entries_data,
+        "download_url": download_url,
+        "expires_in": "1 hour",
+        "filename": filename,
     }
