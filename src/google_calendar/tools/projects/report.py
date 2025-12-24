@@ -173,8 +173,12 @@ def _get_error_records(entries: list[TimeEntry]) -> list[dict]:
 
 
 def _entries_to_json(entries: list[TimeEntry]) -> dict:
-    """Convert entries to JSON with column names."""
-    columns = ["date", "hours", "project", "phase", "task", "description", "billable", "errors"]
+    """Convert entries to JSON with column names.
+
+    Column order matches Excel export format:
+    Date, Fact hours, Project, Project phase, Location, Description, Per diems, Title, Comment, Errors
+    """
+    columns = ["date", "hours", "project", "phase", "location", "description", "per_diems", "title", "comment", "errors"]
 
     rows = []
     for entry in entries:
@@ -186,9 +190,11 @@ def _entries_to_json(entries: list[TimeEntry]) -> dict:
             "hours": entry.duration_hours,
             "project": entry.project_code or "",
             "phase": entry.phase_code or "",
-            "task": entry.task_code or "",
-            "description": entry.description or entry.raw_summary[:100],
-            "billable": entry.is_billable,
+            "location": entry.task_code or "",
+            "description": entry.description or "",
+            "per_diems": None,
+            "title": entry.my_role or "",
+            "comment": entry.raw_summary if entry.raw_summary != entry.description else "",
             "errors": "; ".join(entry.errors) if entry.errors else None,
         })
 

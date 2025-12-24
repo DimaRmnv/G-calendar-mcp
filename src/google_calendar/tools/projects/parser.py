@@ -22,6 +22,7 @@ from google_calendar.tools.projects.database import (
     phase_get,
     task_get,
     is_excluded,
+    get_my_role,
 )
 
 
@@ -34,6 +35,7 @@ class ParsedEvent:
     task_code: Optional[str] = None
     description: Optional[str] = None
     is_billable: bool = False
+    my_role: Optional[str] = None  # Role of contact_id=1 in project
     errors: list = None
     raw_summary: str = ""
     is_excluded: bool = False
@@ -138,6 +140,7 @@ async def _try_parse_with_project(parts: list[str], project: dict) -> ParsedEven
     result.project_code = project["code"]
     result.project_id = project["id"]
     result.is_billable = project["is_billable"]
+    result.my_role = await get_my_role(project["id"])
 
     structure_level = project["structure_level"]
 
@@ -243,6 +246,7 @@ class TimeEntry:
     task_code: Optional[str]
     description: Optional[str]
     is_billable: bool
+    my_role: Optional[str]
     errors: list
     raw_summary: str
     is_excluded: bool = False
@@ -307,6 +311,7 @@ async def parse_calendar_event(event: dict) -> TimeEntry:
         task_code=parsed.task_code,
         description=parsed.description,
         is_billable=parsed.is_billable,
+        my_role=parsed.my_role,
         errors=parsed.errors,
         raw_summary=summary,
         is_excluded=parsed.is_excluded,

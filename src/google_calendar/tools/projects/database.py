@@ -632,6 +632,22 @@ async def get_task_by_project_code(project_code: str, task_code: str) -> Optiona
     return await get_task_by_code(project_code, task_code)
 
 
+async def get_my_role(project_id: int) -> Optional[str]:
+    """Get role of contact_id=1 (owner) in project. Returns role_name_en or None."""
+    async with get_db() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT pr.role_name_en
+            FROM contact_projects cp
+            JOIN project_roles pr ON pr.role_code = cp.role_code
+            WHERE cp.project_id = $1 AND cp.contact_id = 1 AND cp.is_active = TRUE
+            LIMIT 1
+            """,
+            project_id
+        )
+        return row["role_name_en"] if row else None
+
+
 # Aliases for backward compatibility with parser
 get_project = get_project_by_code
 get_phase = get_phase_by_code
