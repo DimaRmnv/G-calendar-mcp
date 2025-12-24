@@ -60,5 +60,8 @@ async def download_export(file_uuid: str):
     return FileResponse(
         path=file_path,
         filename=row["filename"],
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="{row["filename"]}"'
+        }
     )
