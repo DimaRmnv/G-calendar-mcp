@@ -31,6 +31,7 @@ from google_calendar.tools.projects.database import (
     project_org_add, project_org_get, project_org_list, project_org_update, project_org_delete,
     get_project_organizations, get_organization_projects,
 )
+from google_calendar.db.connection import get_db
 from google_calendar.tools.projects.report import generate_report
 
 
@@ -222,6 +223,51 @@ async def _execute_operation(op: str, p: dict) -> dict:
         settings = await config_list()
         return {"settings": settings}
 
+    # Roles (project_roles table)
+    elif op == "role_add":
+        async with get_db() as conn:
+            row = await conn.fetchrow(
+                """INSERT INTO project_roles (role_code, role_name_en, role_name_ru, role_category, description)
+                   VALUES ($1, $2, $3, $4, $5) RETURNING *""",
+                p["role_code"].upper(), p["role_name_en"], p.get("role_name_ru"),
+                p.get("role_category"), p.get("description")
+            )
+            return dict(row)
+    elif op == "role_get":
+        async with get_db() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM project_roles WHERE role_code = $1", p["role_code"].upper()
+            )
+            return dict(row) if row else None
+    elif op == "role_list":
+        async with get_db() as conn:
+            if p.get("role_category"):
+                rows = await conn.fetch(
+                    "SELECT * FROM project_roles WHERE role_category = $1 ORDER BY role_code",
+                    p["role_category"]
+                )
+            else:
+                rows = await conn.fetch("SELECT * FROM project_roles ORDER BY role_category, role_code")
+            return {"roles": [dict(r) for r in rows]}
+    elif op == "role_update":
+        allowed = {"role_name_en", "role_name_ru", "role_category", "description"}
+        updates = {k: v for k, v in p.items() if k in allowed and v is not None}
+        if not updates:
+            return await _execute_operation("role_get", p)
+        set_parts = [f"{k} = ${i+1}" for i, k in enumerate(updates.keys())]
+        values = list(updates.values()) + [p["role_code"].upper()]
+        async with get_db() as conn:
+            await conn.execute(
+                f"UPDATE project_roles SET {', '.join(set_parts)} WHERE role_code = ${len(values)}",
+                *values
+            )
+            row = await conn.fetchrow("SELECT * FROM project_roles WHERE role_code = $1", p["role_code"].upper())
+            return dict(row) if row else None
+    elif op == "role_delete":
+        async with get_db() as conn:
+            result = await conn.execute("DELETE FROM project_roles WHERE role_code = $1", p["role_code"].upper())
+            return {"deleted": result != "DELETE 0"}
+
     # Reports
     elif op == "report_status":
         return await generate_report(report_type="status", account=p.get("account"))
@@ -288,14 +334,25 @@ async def projects(operations: list[dict]) -> dict:
         Tasks: task_add (phase_id OR project_id), task_get, task_list, task_update, task_delete
         Organizations: org_add, org_get, org_list, org_update, org_delete, org_search
         Project-Org Links: project_org_add/get/list/update/delete, project_orgs, org_projects
+        Roles: role_add, role_get, role_list, role_update, role_delete
         Norms: norm_add, norm_get, norm_list, norm_delete
         Reports: report_status, report_week, report_month, report_custom
         System: init, config_get, config_set, config_list, exclusion_*
+
+    ROLES (contact role in project):
+        role_add: {role_code, role_name_en, role_name_ru?, role_category?, description?}
+            role_category: 'consultant', 'client', 'donor', 'partner'
+        role_get: {role_code}
+        role_list: {role_category?} - filter by category
+        role_update: {role_code, role_name_en?, role_name_ru?, role_category?, description?}
+        role_delete: {role_code}
 
     Examples:
         projects(operations=[{"op": "project_list_active"}])
         projects(operations=[{"op": "task_add", "phase_id": 1, "code": "T1"}])  # Phase-linked
         projects(operations=[{"op": "task_add", "project_id": 1, "code": "GEN"}])  # Universal
+        projects(operations=[{"op": "role_list"}])  # List all roles
+        projects(operations=[{"op": "role_add", "role_code": "SA", "role_name_en": "Senior Advisor"}])
     """
     # Check database exists (async)
     db_exists = await database_exists()
