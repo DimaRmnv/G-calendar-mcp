@@ -10,12 +10,9 @@ Schema v2:
 - Extended project fields (full_name, country, sector, dates)
 """
 
-from typing import Optional
 from google_calendar.tools.projects.database import (
     ensure_database,
-    init_database,
     database_exists,
-    get_database_path,
     # Projects
     project_add, project_get, project_list, project_update, project_delete, project_list_active,
     # Phases
@@ -37,173 +34,210 @@ from google_calendar.tools.projects.database import (
 from google_calendar.tools.projects.report import generate_report
 
 
-# Operation handlers
-OPERATIONS = {
-    # Projects (v2: extended with full_name, country, sector, dates)
-    "project_add": lambda p: project_add(
-        code=p["code"],
-        description=p["description"],
-        is_billable=p.get("is_billable", False),
-        is_active=p.get("is_active", True),
-        position=p.get("position"),
-        structure_level=p.get("structure_level", 1),
-        full_name=p.get("full_name"),
-        country=p.get("country"),
-        sector=p.get("sector"),
-        start_date=p.get("start_date"),
-        end_date=p.get("end_date"),
-        contract_value=p.get("contract_value"),
-        currency=p.get("currency", "EUR"),
-        context=p.get("context"),
-    ),
-    "project_get": lambda p: project_get(id=p.get("id"), code=p.get("code")),
-    "project_list": lambda p: {"projects": project_list(
-        billable_only=p.get("billable_only", False),
-        active_only=p.get("active_only", False)
-    )},
-    "project_list_active": lambda p: {"projects": project_list_active()},
-    "project_update": lambda p: project_update(id=p["id"], **{k: v for k, v in p.items() if k != "id"}),
-    "project_delete": lambda p: {"deleted": project_delete(id=p["id"])},
-    "project_activate": lambda p: project_update(id=p["id"], is_active=True),
-    "project_deactivate": lambda p: project_update(id=p["id"], is_active=False),
+async def _execute_operation(op: str, p: dict) -> dict:
+    """Execute a single operation. All database functions are async."""
+
+    # Projects
+    if op == "project_add":
+        return await project_add(
+            code=p["code"],
+            description=p["description"],
+            is_billable=p.get("is_billable", False),
+            is_active=p.get("is_active", True),
+            position=p.get("position"),
+            structure_level=p.get("structure_level", 1),
+            full_name=p.get("full_name"),
+            country=p.get("country"),
+            sector=p.get("sector"),
+            start_date=p.get("start_date"),
+            end_date=p.get("end_date"),
+            contract_value=p.get("contract_value"),
+            currency=p.get("currency", "EUR"),
+            context=p.get("context"),
+        )
+    elif op == "project_get":
+        return await project_get(id=p.get("id"), code=p.get("code"))
+    elif op == "project_list":
+        projects = await project_list(
+            billable_only=p.get("billable_only", False),
+            active_only=p.get("active_only", False)
+        )
+        return {"projects": projects}
+    elif op == "project_list_active":
+        projects = await project_list_active()
+        return {"projects": projects}
+    elif op == "project_update":
+        return await project_update(id=p["id"], **{k: v for k, v in p.items() if k != "id"})
+    elif op == "project_delete":
+        deleted = await project_delete(id=p["id"])
+        return {"deleted": deleted}
+    elif op == "project_activate":
+        return await project_update(id=p["id"], is_active=True)
+    elif op == "project_deactivate":
+        return await project_update(id=p["id"], is_active=False)
 
     # Phases
-    "phase_add": lambda p: phase_add(
-        project_id=p["project_id"],
-        code=p["code"],
-        description=p.get("description")
-    ),
-    "phase_get": lambda p: phase_get(id=p.get("id"), project_id=p.get("project_id"), code=p.get("code")),
-    "phase_list": lambda p: {"phases": phase_list(project_id=p.get("project_id"))},
-    "phase_update": lambda p: phase_update(id=p["id"], **{k: v for k, v in p.items() if k != "id"}),
-    "phase_delete": lambda p: {"deleted": phase_delete(id=p["id"])},
+    elif op == "phase_add":
+        return await phase_add(
+            project_id=p["project_id"],
+            code=p["code"],
+            description=p.get("description")
+        )
+    elif op == "phase_get":
+        return await phase_get(id=p.get("id"), project_id=p.get("project_id"), code=p.get("code"))
+    elif op == "phase_list":
+        phases = await phase_list(project_id=p.get("project_id"))
+        return {"phases": phases}
+    elif op == "phase_update":
+        return await phase_update(id=p["id"], **{k: v for k, v in p.items() if k != "id"})
+    elif op == "phase_delete":
+        deleted = await phase_delete(id=p["id"])
+        return {"deleted": deleted}
 
-    # Tasks (v2: linked to phases, not projects)
-    "task_add": lambda p: task_add(
-        phase_id=p["phase_id"],  # v2: tasks link to phases
-        code=p["code"],
-        description=p.get("description")
-    ),
-    "task_get": lambda p: task_get(id=p.get("id"), phase_id=p.get("phase_id"), code=p.get("code")),
-    "task_list": lambda p: {"tasks": task_list(phase_id=p.get("phase_id"), project_id=p.get("project_id"))},
-    "task_update": lambda p: task_update(id=p["id"], **{k: v for k, v in p.items() if k != "id"}),
-    "task_delete": lambda p: {"deleted": task_delete(id=p["id"])},
+    # Tasks (v2: linked to phases)
+    elif op == "task_add":
+        return await task_add(
+            phase_id=p["phase_id"],
+            code=p["code"],
+            description=p.get("description")
+        )
+    elif op == "task_get":
+        return await task_get(id=p.get("id"), phase_id=p.get("phase_id"), code=p.get("code"))
+    elif op == "task_list":
+        tasks = await task_list(phase_id=p.get("phase_id"), project_id=p.get("project_id"))
+        return {"tasks": tasks}
+    elif op == "task_update":
+        return await task_update(id=p["id"], **{k: v for k, v in p.items() if k != "id"})
+    elif op == "task_delete":
+        deleted = await task_delete(id=p["id"])
+        return {"deleted": deleted}
 
     # Organizations (v2)
-    "org_add": lambda p: org_add(
-        name=p["name"],
-        short_name=p.get("short_name"),
-        name_local=p.get("name_local"),
-        organization_type=p.get("organization_type"),
-        parent_org_id=p.get("parent_org_id"),
-        country=p.get("country"),
-        city=p.get("city"),
-        website=p.get("website"),
-        context=p.get("context"),
-        relationship_status=p.get("relationship_status", "active"),
-        first_contact_date=p.get("first_contact_date"),
-        notes=p.get("notes"),
-    ),
-    "org_get": lambda p: org_get(id=p.get("id"), name=p.get("name")),
-    "org_list": lambda p: {"organizations": org_list(
-        organization_type=p.get("organization_type"),
-        country=p.get("country"),
-        relationship_status=p.get("relationship_status"),
-        active_only=p.get("active_only", True),
-    )},
-    "org_update": lambda p: org_update(id=p["id"], **{k: v for k, v in p.items() if k != "id"}),
-    "org_delete": lambda p: {"deleted": org_delete(id=p["id"])},
-    "org_search": lambda p: {"organizations": org_search(query=p["query"], limit=p.get("limit", 20))},
+    elif op == "org_add":
+        return await org_add(
+            name=p["name"],
+            short_name=p.get("short_name"),
+            name_local=p.get("name_local"),
+            organization_type=p.get("organization_type"),
+            parent_org_id=p.get("parent_org_id"),
+            country=p.get("country"),
+            city=p.get("city"),
+            website=p.get("website"),
+            context=p.get("context"),
+            relationship_status=p.get("relationship_status", "active"),
+            first_contact_date=p.get("first_contact_date"),
+            notes=p.get("notes"),
+        )
+    elif op == "org_get":
+        return await org_get(id=p.get("id"), name=p.get("name"))
+    elif op == "org_list":
+        orgs = await org_list(
+            organization_type=p.get("organization_type"),
+            country=p.get("country"),
+            relationship_status=p.get("relationship_status"),
+            active_only=p.get("active_only", True),
+        )
+        return {"organizations": orgs}
+    elif op == "org_update":
+        return await org_update(id=p["id"], **{k: v for k, v in p.items() if k != "id"})
+    elif op == "org_delete":
+        deleted = await org_delete(id=p["id"])
+        return {"deleted": deleted}
+    elif op == "org_search":
+        orgs = await org_search(query=p["query"], limit=p.get("limit", 20))
+        return {"organizations": orgs}
 
     # Project-Organization links (v2)
-    "project_org_add": lambda p: project_org_add(
-        project_id=p["project_id"],
-        organization_id=p["organization_id"],
-        org_role=p["org_role"],
-        contract_value=p.get("contract_value"),
-        currency=p.get("currency", "EUR"),
-        is_lead=p.get("is_lead", False),
-        start_date=p.get("start_date"),
-        end_date=p.get("end_date"),
-        notes=p.get("notes"),
-    ),
-    "project_org_get": lambda p: project_org_get(id=p["id"]),
-    "project_org_list": lambda p: {"links": project_org_list(
-        project_id=p.get("project_id"),
-        organization_id=p.get("organization_id"),
-        org_role=p.get("org_role"),
-    )},
-    "project_org_update": lambda p: project_org_update(id=p["id"], **{k: v for k, v in p.items() if k != "id"}),
-    "project_org_delete": lambda p: {"deleted": project_org_delete(id=p["id"])},
-    "project_orgs": lambda p: {"organizations": get_project_organizations(project_id=p["project_id"])},
-    "org_projects": lambda p: {"projects": get_organization_projects(organization_id=p["organization_id"])},
+    elif op == "project_org_add":
+        return await project_org_add(
+            project_id=p["project_id"],
+            organization_id=p["organization_id"],
+            org_role=p["org_role"],
+            contract_value=p.get("contract_value"),
+            currency=p.get("currency", "EUR"),
+            is_lead=p.get("is_lead", False),
+            start_date=p.get("start_date"),
+            end_date=p.get("end_date"),
+            notes=p.get("notes"),
+        )
+    elif op == "project_org_get":
+        return await project_org_get(id=p["id"])
+    elif op == "project_org_list":
+        links = await project_org_list(
+            project_id=p.get("project_id"),
+            organization_id=p.get("organization_id"),
+            org_role=p.get("org_role"),
+        )
+        return {"links": links}
+    elif op == "project_org_update":
+        return await project_org_update(id=p["id"], **{k: v for k, v in p.items() if k != "id"})
+    elif op == "project_org_delete":
+        deleted = await project_org_delete(id=p["id"])
+        return {"deleted": deleted}
+    elif op == "project_orgs":
+        orgs = await get_project_organizations(project_id=p["project_id"])
+        return {"organizations": orgs}
+    elif op == "org_projects":
+        projects = await get_organization_projects(organization_id=p["organization_id"])
+        return {"projects": projects}
 
     # Norms
-    "norm_add": lambda p: norm_add(year=p["year"], month=p["month"], hours=p["hours"]),
-    "norm_get": lambda p: norm_get(id=p.get("id"), year=p.get("year"), month=p.get("month")),
-    "norm_list": lambda p: {"norms": norm_list(year=p.get("year"))},
-    "norm_delete": lambda p: {"deleted": norm_delete(id=p["id"])},
+    elif op == "norm_add":
+        return await norm_add(year=p["year"], month=p["month"], hours=p["hours"])
+    elif op == "norm_get":
+        return await norm_get(id=p.get("id"), year=p.get("year"), month=p.get("month"))
+    elif op == "norm_list":
+        norms = await norm_list(year=p.get("year"))
+        return {"norms": norms}
+    elif op == "norm_delete":
+        deleted = await norm_delete(id=p["id"])
+        return {"deleted": deleted}
 
     # Exclusions
-    "exclusion_add": lambda p: exclusion_add(pattern=p["pattern"]),
-    "exclusion_list": lambda p: {"exclusions": exclusion_list()},
-    "exclusion_delete": lambda p: {"deleted": exclusion_delete(id=p["id"])},
+    elif op == "exclusion_add":
+        return await exclusion_add(pattern=p["pattern"])
+    elif op == "exclusion_list":
+        exclusions = await exclusion_list()
+        return {"exclusions": exclusions}
+    elif op == "exclusion_delete":
+        deleted = await exclusion_delete(id=p["id"])
+        return {"deleted": deleted}
 
     # Config
-    "config_get": lambda p: {"key": p["key"], "value": config_get(p["key"])},
-    "config_set": lambda p: config_set(key=p["key"], value=str(p["value"])),
-    "config_list": lambda p: {"settings": config_list()},
+    elif op == "config_get":
+        value = await config_get(p["key"])
+        return {"key": p["key"], "value": value}
+    elif op == "config_set":
+        return await config_set(key=p["key"], value=str(p["value"]))
+    elif op == "config_list":
+        settings = await config_list()
+        return {"settings": settings}
 
-    # Init
-    "init": lambda p: _init_database(force_reset=p.get("force_reset", False)),
-}
+    # Reports
+    elif op == "report_status":
+        return await generate_report(report_type="status", account=p.get("account"))
+    elif op == "report_week":
+        return await generate_report(report_type="week", account=p.get("account"))
+    elif op == "report_month":
+        return await generate_report(report_type="month", account=p.get("account"))
+    elif op == "report_custom":
+        return await generate_report(
+            report_type="custom",
+            start_date=p.get("start_date"),
+            end_date=p.get("end_date"),
+            account=p.get("account")
+        )
 
-# Async operations (reports require awaiting)
-ASYNC_OPERATIONS = {
-    "report_status": lambda p: generate_report(
-        report_type="status",
-        account=p.get("account")
-    ),
-    "report_week": lambda p: generate_report(
-        report_type="week",
-        account=p.get("account")
-    ),
-    "report_month": lambda p: generate_report(
-        report_type="month",
-        account=p.get("account")
-    ),
-    "report_custom": lambda p: generate_report(
-        report_type="custom",
-        start_date=p.get("start_date"),
-        end_date=p.get("end_date"),
-        account=p.get("account")
-    ),
-}
+    # Init (schema managed by workflow, this is just a check)
+    elif op == "init":
+        exists = await database_exists()
+        if exists:
+            return {"status": "ready", "message": "Database tables exist (schema managed by workflow)"}
+        else:
+            return {"status": "error", "message": "Database tables do not exist. Check workflow deployment."}
 
-
-def _init_database(force_reset: bool = False) -> dict:
-    """Initialize empty database."""
-    import os
-
-    db_path = get_database_path()
-
-    if database_exists() and not force_reset:
-        return {
-            "status": "exists",
-            "message": "Database already exists. Use force_reset=True to recreate.",
-            "path": str(db_path)
-        }
-
-    if force_reset and database_exists():
-        os.remove(db_path)
-
-    init_database()
-
-    return {
-        "status": "created",
-        "message": "Empty database created.",
-        "path": str(db_path)
-    }
+    else:
+        raise ValueError(f"Unknown operation: {op}")
 
 
 async def projects(operations: list[dict]) -> dict:
@@ -242,7 +276,14 @@ async def projects(operations: list[dict]) -> dict:
         projects(operations=[{"op": "project_get", "code": "CAYIB"}])
         projects(operations=[{"op": "phase_list", "project_id": 1}])
     """
-    ensure_database()
+    # Check database exists (async)
+    db_exists = await database_exists()
+    if not db_exists:
+        return {
+            "error": "Database not available. Schema should be applied by workflow.",
+            "results": [],
+            "summary": {"total": len(operations), "success": 0, "errors": len(operations)}
+        }
 
     results = []
     success_count = 0
@@ -256,31 +297,16 @@ async def projects(operations: list[dict]) -> dict:
             error_count += 1
             continue
 
-        # Check sync operations first
-        if op in OPERATIONS:
-            try:
-                result = OPERATIONS[op](op_data)
-                results.append({"index": i, "op": op, "result": result})
-                success_count += 1
-            except Exception as e:
-                results.append({"index": i, "op": op, "error": str(e)})
-                error_count += 1
-            continue
-
-        # Check async operations (reports)
-        if op in ASYNC_OPERATIONS:
-            try:
-                result = await ASYNC_OPERATIONS[op](op_data)
-                results.append({"index": i, "op": op, "result": result})
-                success_count += 1
-            except Exception as e:
-                results.append({"index": i, "op": op, "error": str(e)})
-                error_count += 1
-            continue
-
-        # Unknown operation
-        results.append({"index": i, "op": op, "error": f"Unknown operation: {op}"})
-        error_count += 1
+        try:
+            result = await _execute_operation(op, op_data)
+            results.append({"index": i, "op": op, "result": result})
+            success_count += 1
+        except ValueError as e:
+            results.append({"index": i, "op": op, "error": str(e)})
+            error_count += 1
+        except Exception as e:
+            results.append({"index": i, "op": op, "error": str(e)})
+            error_count += 1
 
     return {
         "results": results,

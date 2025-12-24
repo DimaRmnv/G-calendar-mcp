@@ -48,12 +48,19 @@ jobs:
           ssh -i ~/.ssh/deploy_key ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} '
             cd ~/apps/google-calendar-mcp
 
-            # Create database if not exists
+            # PostgreSQL: Create database if not exists
             docker exec shared-postgres psql -U travel -tc "SELECT 1 FROM pg_database WHERE datname = '\''google_calendar_mcp'\''" | grep -q 1 || \
               docker exec shared-postgres psql -U travel -c "CREATE DATABASE google_calendar_mcp"
 
-            # Apply schema migrations
+            # PostgreSQL: Apply schema migrations
             docker exec -i shared-postgres psql -U travel -d google_calendar_mcp < src/google_calendar/db/schema.sql
+
+            # SQLite: Initialize projects database (creates tables if not exist)
+            docker exec google-calendar-mcp python -c "
+from google_calendar.tools.projects.database import ensure_database
+ensure_database()
+print(\"SQLite projects database initialized\")
+"
 
             echo "Migrations complete!"
           '

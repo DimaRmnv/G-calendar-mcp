@@ -1,27 +1,24 @@
 """
-Database management for contacts.
+Database management for contacts using PostgreSQL.
 
-Extends the existing time_tracking.db with contacts tables.
+Uses shared connection pool from google_calendar.db.connection.
+Schema managed via google_calendar/db/schema.sql.
+
 Tables: contacts, contact_channels, project_roles, contact_projects
-Database location: ~/.mcp/google-calendar/time_tracking.db
+Views: v_contacts_full, v_project_team, v_contact_projects
 """
 
-import sqlite3
-from pathlib import Path
 from typing import Optional
-from contextlib import contextmanager
 
-# Optional fuzzy search - fallback to LIKE if not installed
+# Optional fuzzy search - fallback to ILIKE if not installed
 try:
     from rapidfuzz import fuzz
     FUZZY_AVAILABLE = True
 except ImportError:
     FUZZY_AVAILABLE = False
 
-from google_calendar.utils.config import get_app_dir
+from google_calendar.db.connection import get_db, check_db_exists
 
-
-DATABASE_NAME = "time_tracking.db"
 
 # Valid values for CHECK constraints
 ORGANIZATION_TYPES = ('donor', 'client', 'partner', 'bfc', 'government', 'bank', 'mfi', 'other')
@@ -32,9 +29,8 @@ CHANNEL_TYPES = (
 )
 ROLE_CATEGORIES = ('consultant', 'client', 'donor', 'partner')
 
-# Standard project roles
+# Standard project roles (for reference - inserted via schema.sql)
 STANDARD_ROLES = [
-    # Consultant team
     ('TL', 'Team Leader', 'Руководитель группы', 'consultant', 'Overall project leadership'),
     ('DTL', 'Deputy Team Leader', 'Заместитель руководителя', 'consultant', 'Supports TL'),
     ('KE', 'Key Expert', 'Ключевой эксперт', 'consultant', 'Named expert in contract'),
@@ -44,303 +40,61 @@ STANDARD_ROLES = [
     ('JE', 'Junior Expert', 'Младший эксперт', 'consultant', 'Entry-level'),
     ('LA', 'Local Assistant', 'Локальный ассистент', 'consultant', 'In-country support'),
     ('INT', 'Interpreter/Translator', 'Переводчик', 'consultant', 'Language support'),
-    # Client side
     ('CD', 'Client Director', 'Директор клиента', 'client', 'Decision maker'),
     ('CPM', 'Client Project Manager', 'Менеджер проекта клиента', 'client', 'Day-to-day contact'),
     ('PIU', 'PIU Coordinator', 'Координатор ГРП', 'client', 'Implementation unit lead'),
     ('CP', 'Counterpart', 'Контрагент', 'client', 'Working-level staff'),
     ('BEN', 'Beneficiary', 'Бенефициар', 'client', 'End beneficiary'),
-    # Donor side
     ('DO', 'Donor Officer', 'Представитель донора', 'donor', 'Main donor contact'),
     ('DPM', 'Donor Project Manager', 'Менеджер проекта донора', 'donor', 'Donor staff'),
     ('TA', 'Technical Advisor', 'Технический советник', 'donor', 'Technical oversight'),
-    # Partners
     ('PC', 'Partner Consultant', 'Консультант-партнер', 'partner', 'Partner organization'),
     ('SUB', 'Subcontractor', 'Субподрядчик', 'partner', 'Subcontracted entity'),
 ]
 
 
-def get_database_path() -> Path:
-    """Get path to database (shared with time_tracking)."""
-    return get_app_dir() / DATABASE_NAME
+async def database_exists() -> bool:
+    """Check if database exists."""
+    return await check_db_exists()
 
 
-def database_exists() -> bool:
-    """Check if database file exists."""
-    return get_database_path().exists()
+async def contacts_tables_exist() -> bool:
+    """Check if contacts tables exist in database."""
+    async with get_db() as conn:
+        row = await conn.fetchrow("""
+            SELECT EXISTS (
+                SELECT FROM pg_tables
+                WHERE schemaname = 'public' AND tablename = 'contacts'
+            )
+        """)
+        return row[0] if row else False
 
 
-def contacts_tables_exist() -> bool:
-    """Check if contacts tables already exist in database."""
-    if not database_exists():
-        return False
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='contacts'"
-        )
-        return cursor.fetchone() is not None
-
-
-@contextmanager
-def get_connection():
-    """Context manager for database connections."""
-    conn = sqlite3.connect(get_database_path())
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+async def ensure_contacts_schema() -> bool:
+    """Ensure contacts tables exist. Schema managed via schema.sql."""
+    return await contacts_tables_exist()
 
 
 def init_contacts_schema() -> None:
-    """Initialize contacts tables in the database."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-
-        # ---------------------------------------------------------------------
-        # CONTACTS - Core contact information
-        # ---------------------------------------------------------------------
-        cursor.execute(f"""
-            CREATE TABLE IF NOT EXISTS contacts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                
-                -- Basic info
-                first_name TEXT NOT NULL,
-                last_name TEXT NOT NULL,
-                display_name TEXT GENERATED ALWAYS AS (first_name || ' ' || last_name) STORED,
-                
-                -- Organization
-                organization TEXT,
-                organization_type TEXT CHECK(organization_type IN 
-                    {ORGANIZATION_TYPES}),
-                job_title TEXT,
-                department TEXT,
-                
-                -- Location & Time
-                country TEXT,
-                city TEXT,
-                timezone TEXT,
-                
-                -- Communication preferences
-                preferred_channel TEXT DEFAULT 'email' CHECK(preferred_channel IN 
-                    {PREFERRED_CHANNELS}),
-                preferred_language TEXT DEFAULT 'en',
-                
-                -- Notes
-                notes TEXT,
-                
-                -- Metadata
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                is_active BOOLEAN DEFAULT TRUE
-            )
-        """)
-
-        # ---------------------------------------------------------------------
-        # CONTACT_CHANNELS - All contact methods
-        # ---------------------------------------------------------------------
-        cursor.execute(f"""
-            CREATE TABLE IF NOT EXISTS contact_channels (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                contact_id INTEGER NOT NULL,
-                
-                channel_type TEXT NOT NULL CHECK(channel_type IN 
-                    {CHANNEL_TYPES}),
-                channel_value TEXT NOT NULL,
-                channel_label TEXT,
-                is_primary BOOLEAN DEFAULT FALSE,
-                notes TEXT,
-                
-                FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
-                UNIQUE(contact_id, channel_type, channel_value)
-            )
-        """)
-
-        # ---------------------------------------------------------------------
-        # PROJECT_ROLES - Standard consulting project roles
-        # ---------------------------------------------------------------------
-        cursor.execute(f"""
-            CREATE TABLE IF NOT EXISTS project_roles (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                role_code TEXT UNIQUE NOT NULL,
-                role_name_en TEXT NOT NULL,
-                role_name_ru TEXT,
-                role_category TEXT CHECK(role_category IN {ROLE_CATEGORIES}),
-                description TEXT
-            )
-        """)
-
-        # Insert standard roles
-        for role in STANDARD_ROLES:
-            cursor.execute(
-                """
-                INSERT OR IGNORE INTO project_roles 
-                (role_code, role_name_en, role_name_ru, role_category, description)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                role
-            )
-
-        # ---------------------------------------------------------------------
-        # CONTACT_PROJECTS - Links contacts to projects with roles
-        # ---------------------------------------------------------------------
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS contact_projects (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                contact_id INTEGER NOT NULL,
-                project_id INTEGER NOT NULL,
-                role_code TEXT NOT NULL,
-                
-                start_date DATE,
-                end_date DATE,
-                is_active BOOLEAN DEFAULT TRUE,
-                workdays_allocated INTEGER,
-                notes TEXT,
-                
-                FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
-                FOREIGN KEY (role_code) REFERENCES project_roles(role_code),
-                FOREIGN KEY (project_id) REFERENCES projects(id),
-                UNIQUE(contact_id, project_id, role_code)
-            )
-        """)
-
-        # ---------------------------------------------------------------------
-        # INDEXES
-        # ---------------------------------------------------------------------
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_contacts_name ON contacts(first_name, last_name)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_contacts_org ON contacts(organization)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_contacts_display ON contacts(display_name)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_contacts_country ON contacts(country)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_channels_type ON contact_channels(channel_type)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_channels_value ON contact_channels(channel_value)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_contact_projects_project ON contact_projects(project_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_contact_projects_contact ON contact_projects(contact_id)")
-
-        # ---------------------------------------------------------------------
-        # VIEWS
-        # ---------------------------------------------------------------------
-        
-        # Full contact with primary channels
-        cursor.execute("""
-            CREATE VIEW IF NOT EXISTS v_contacts_full AS
-            SELECT 
-                c.id,
-                c.first_name,
-                c.last_name,
-                c.display_name,
-                c.organization,
-                c.organization_type,
-                c.job_title,
-                c.department,
-                c.country,
-                c.city,
-                c.timezone,
-                c.preferred_channel,
-                c.preferred_language,
-                (SELECT channel_value FROM contact_channels WHERE contact_id = c.id 
-                 AND channel_type = 'email' AND is_primary = 1 LIMIT 1) as primary_email,
-                (SELECT channel_value FROM contact_channels WHERE contact_id = c.id 
-                 AND channel_type = 'phone' AND is_primary = 1 LIMIT 1) as primary_phone,
-                (SELECT channel_value FROM contact_channels WHERE contact_id = c.id 
-                 AND channel_type = 'telegram_chat_id' LIMIT 1) as telegram_chat_id,
-                (SELECT channel_value FROM contact_channels WHERE contact_id = c.id 
-                 AND channel_type = 'telegram_username' LIMIT 1) as telegram_username,
-                (SELECT channel_value FROM contact_channels WHERE contact_id = c.id 
-                 AND channel_type = 'teams_chat_id' LIMIT 1) as teams_chat_id,
-                c.notes,
-                c.created_at,
-                c.updated_at
-            FROM contacts c
-            WHERE c.is_active = 1
-        """)
-
-        # Project team view
-        cursor.execute("""
-            CREATE VIEW IF NOT EXISTS v_project_team AS
-            SELECT 
-                cp.project_id,
-                c.id as contact_id,
-                c.display_name,
-                c.organization,
-                c.job_title,
-                pr.role_code,
-                pr.role_name_en as project_role,
-                pr.role_category,
-                c.preferred_channel,
-                c.preferred_language,
-                (SELECT channel_value FROM contact_channels WHERE contact_id = c.id 
-                 AND channel_type = 'email' AND is_primary = 1 LIMIT 1) as email,
-                (SELECT channel_value FROM contact_channels WHERE contact_id = c.id 
-                 AND channel_type = 'telegram_chat_id' LIMIT 1) as telegram_chat_id,
-                (SELECT channel_value FROM contact_channels WHERE contact_id = c.id 
-                 AND channel_type = 'teams_chat_id' LIMIT 1) as teams_chat_id
-            FROM contact_projects cp
-            JOIN contacts c ON cp.contact_id = c.id
-            JOIN project_roles pr ON cp.role_code = pr.role_code
-            WHERE cp.is_active = 1 AND c.is_active = 1
-            ORDER BY 
-                CASE pr.role_category 
-                    WHEN 'donor' THEN 1 
-                    WHEN 'client' THEN 2 
-                    WHEN 'consultant' THEN 3 
-                    WHEN 'partner' THEN 4 
-                END
-        """)
-
-        # Contact projects view
-        cursor.execute("""
-            CREATE VIEW IF NOT EXISTS v_contact_projects AS
-            SELECT 
-                cp.id,
-                cp.contact_id,
-                c.display_name as contact_name,
-                c.organization,
-                cp.project_id,
-                cp.role_code,
-                pr.role_name_en,
-                pr.role_name_ru,
-                pr.role_category,
-                cp.is_active,
-                cp.workdays_allocated,
-                cp.start_date,
-                cp.end_date,
-                cp.notes
-            FROM contact_projects cp
-            JOIN contacts c ON cp.contact_id = c.id
-            JOIN project_roles pr ON cp.role_code = pr.role_code
-        """)
+    """Placeholder - schema managed via schema.sql in workflow."""
+    pass
 
 
-def ensure_contacts_schema() -> bool:
-    """Ensure contacts tables exist. Returns True if newly created."""
-    if not database_exists():
-        # Database doesn't exist - need to init time_tracking first
-        raise RuntimeError(
-            "Database does not exist. Enable time_tracking first to create the database, "
-            "or run time_tracking init."
-        )
-    
-    newly_created = not contacts_tables_exist()
-    if newly_created:
-        init_contacts_schema()
-    return newly_created
+def get_connection():
+    """Placeholder for compatibility - use async get_db() instead."""
+    raise NotImplementedError("Use async get_db() from db.connection")
 
 
 # =============================================================================
 # CONTACTS CRUD
 # =============================================================================
 
-def contact_add(
+async def contact_add(
     first_name: str,
     last_name: str,
     organization: Optional[str] = None,
     organization_type: Optional[str] = None,
+    organization_id: Optional[int] = None,
     job_title: Optional[str] = None,
     department: Optional[str] = None,
     country: Optional[str] = None,
@@ -348,83 +102,82 @@ def contact_add(
     timezone: Optional[str] = None,
     preferred_channel: str = 'email',
     preferred_language: str = 'en',
+    context: Optional[str] = None,
+    relationship_type: Optional[str] = None,
+    relationship_strength: Optional[str] = None,
+    last_interaction_date: Optional[str] = None,
     notes: Optional[str] = None
 ) -> dict:
     """Create a new contact. Returns created contact with id."""
-    # Validate enums
     if organization_type and organization_type not in ORGANIZATION_TYPES:
         raise ValueError(f"Invalid organization_type. Must be one of: {ORGANIZATION_TYPES}")
     if preferred_channel not in PREFERRED_CHANNELS:
         raise ValueError(f"Invalid preferred_channel. Must be one of: {PREFERRED_CHANNELS}")
-    
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
+
+    async with get_db() as conn:
+        row = await conn.fetchrow(
             """
             INSERT INTO contacts (
-                first_name, last_name, organization, organization_type,
+                first_name, last_name, organization, organization_type, organization_id,
                 job_title, department, country, city, timezone,
-                preferred_channel, preferred_language, notes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                preferred_channel, preferred_language, context,
+                relationship_type, relationship_strength, last_interaction_date, notes
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+            RETURNING id
             """,
-            (first_name, last_name, organization, organization_type,
-             job_title, department, country, city, timezone,
-             preferred_channel, preferred_language, notes)
+            first_name, last_name, organization, organization_type, organization_id,
+            job_title, department, country, city, timezone,
+            preferred_channel, preferred_language, context,
+            relationship_type, relationship_strength, last_interaction_date, notes
         )
-        new_id = cursor.lastrowid
-    # Fetch after commit
-    return contact_get(id=new_id)
+        return await contact_get(id=row['id'])
 
 
-def contact_get(
+async def contact_get(
     id: Optional[int] = None,
     email: Optional[str] = None,
     telegram: Optional[str] = None,
     phone: Optional[str] = None
 ) -> Optional[dict]:
     """Get contact by id or by channel value."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        
+    async with get_db() as conn:
         if id is not None:
-            cursor.execute("SELECT * FROM v_contacts_full WHERE id = ?", (id,))
+            row = await conn.fetchrow("SELECT * FROM v_contacts_full WHERE id = $1", id)
         elif email is not None:
-            cursor.execute(
+            row = await conn.fetchrow(
                 """
                 SELECT cf.* FROM v_contacts_full cf
                 JOIN contact_channels cc ON cf.id = cc.contact_id
-                WHERE cc.channel_type = 'email' AND cc.channel_value = ?
+                WHERE cc.channel_type = 'email' AND cc.channel_value = $1
                 """,
-                (email,)
+                email
             )
         elif telegram is not None:
-            # Search by telegram_id, telegram_username, or telegram_chat_id
-            cursor.execute(
+            row = await conn.fetchrow(
                 """
                 SELECT cf.* FROM v_contacts_full cf
                 JOIN contact_channels cc ON cf.id = cc.contact_id
                 WHERE cc.channel_type IN ('telegram_id', 'telegram_username', 'telegram_chat_id')
-                  AND cc.channel_value = ?
+                  AND cc.channel_value = $1
                 """,
-                (telegram.lstrip('@'),)
+                telegram.lstrip('@')
             )
         elif phone is not None:
-            cursor.execute(
+            row = await conn.fetchrow(
                 """
                 SELECT cf.* FROM v_contacts_full cf
                 JOIN contact_channels cc ON cf.id = cc.contact_id
-                WHERE cc.channel_type = 'phone' AND cc.channel_value = ?
+                WHERE cc.channel_type = 'phone' AND cc.channel_value = $1
                 """,
-                (phone,)
+                phone
             )
         else:
             return None
-        
-        row = cursor.fetchone()
+
         return dict(row) if row else None
 
 
-def contact_list(
+async def contact_list(
     organization: Optional[str] = None,
     organization_type: Optional[str] = None,
     country: Optional[str] = None,
@@ -433,197 +186,222 @@ def contact_list(
     active_only: bool = True
 ) -> list[dict]:
     """List contacts with optional filters."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        
+    async with get_db() as conn:
         if project_id is not None:
             # Use project team view
-            query = "SELECT * FROM v_project_team WHERE project_id = ?"
-            params = [project_id]
             if role_code:
-                query += " AND role_code = ?"
-                params.append(role_code)
-            cursor.execute(query, params)
+                rows = await conn.fetch(
+                    "SELECT * FROM v_project_team WHERE project_id = $1 AND role_code = $2",
+                    project_id, role_code
+                )
+            else:
+                rows = await conn.fetch(
+                    "SELECT * FROM v_project_team WHERE project_id = $1",
+                    project_id
+                )
         else:
-            # Use full contacts view
-            base = "v_contacts_full" if active_only else "contacts"
+            # Build dynamic query
             conditions = []
             params = []
-            
+            param_idx = 1
+
             if organization:
-                conditions.append("organization LIKE ?")
+                conditions.append(f"organization ILIKE ${param_idx}")
                 params.append(f"%{organization}%")
+                param_idx += 1
             if organization_type:
-                conditions.append("organization_type = ?")
+                conditions.append(f"organization_type = ${param_idx}")
                 params.append(organization_type)
+                param_idx += 1
             if country:
-                conditions.append("country = ?")
+                conditions.append(f"country = ${param_idx}")
                 params.append(country)
-            if not active_only:
-                pass  # Include all
-            
-            query = f"SELECT * FROM {base}"
+                param_idx += 1
+
+            # v_contacts_full already filters is_active = TRUE
+            base_table = "v_contacts_full" if active_only else "contacts"
+            query = f"SELECT * FROM {base_table}"
+
             if conditions:
                 query += " WHERE " + " AND ".join(conditions)
             query += " ORDER BY display_name"
-            
-            cursor.execute(query, params)
-        
-        return [dict(row) for row in cursor.fetchall()]
+
+            rows = await conn.fetch(query, *params)
+
+        return [dict(row) for row in rows]
 
 
-def contact_update(id: int, **kwargs) -> Optional[dict]:
+async def contact_update(id: int, **kwargs) -> Optional[dict]:
     """Update contact by id."""
     allowed_fields = {
-        'first_name', 'last_name', 'organization', 'organization_type',
+        'first_name', 'last_name', 'organization', 'organization_type', 'organization_id',
         'job_title', 'department', 'country', 'city', 'timezone',
-        'preferred_channel', 'preferred_language', 'notes', 'is_active'
+        'preferred_channel', 'preferred_language', 'context',
+        'relationship_type', 'relationship_strength', 'last_interaction_date',
+        'notes', 'is_active'
     }
     updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
-    
+
     if not updates:
-        return contact_get(id=id)
-    
-    # Validate enums
+        return await contact_get(id=id)
+
     if 'organization_type' in updates and updates['organization_type'] not in ORGANIZATION_TYPES:
         raise ValueError(f"Invalid organization_type. Must be one of: {ORGANIZATION_TYPES}")
     if 'preferred_channel' in updates and updates['preferred_channel'] not in PREFERRED_CHANNELS:
         raise ValueError(f"Invalid preferred_channel. Must be one of: {PREFERRED_CHANNELS}")
-    
-    set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
-    values = list(updates.values()) + [id]
-    
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            f"UPDATE contacts SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            values
+
+    set_parts = []
+    values = []
+    for i, (k, v) in enumerate(updates.items(), 1):
+        set_parts.append(f"{k} = ${i}")
+        values.append(v)
+
+    values.append(id)
+    set_clause = ", ".join(set_parts)
+
+    async with get_db() as conn:
+        result = await conn.execute(
+            f"UPDATE contacts SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ${len(values)}",
+            *values
         )
-        updated = cursor.rowcount > 0
-    # Fetch after commit
-    if not updated:
-        return None
-    return contact_get(id=id)
+        if result == "UPDATE 0":
+            return None
+
+    return await contact_get(id=id)
 
 
-def contact_delete(id: int) -> bool:
+async def contact_delete(id: int) -> bool:
     """Delete contact by id (cascades to channels and project assignments)."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM contacts WHERE id = ?", (id,))
-        return cursor.rowcount > 0
+    async with get_db() as conn:
+        result = await conn.execute("DELETE FROM contacts WHERE id = $1", id)
+        return result != "DELETE 0"
 
 
-def _contact_search_like(query: str, limit: int = 20) -> list[dict]:
+async def contact_search(
+    query: str,
+    limit: int = 20,
+    threshold: int = 60
+) -> list[dict]:
     """
-    Fallback LIKE-based search when rapidfuzz not available.
-    
-    Searches: contact fields, channels, and project assignments.
-    """
-    # Strip @ for telegram username search
-    query = query.lstrip('@')
-    
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        search_pattern = f"%{query}%"
-        
-        cursor.execute(
-            """
-            SELECT 
-                cf.*,
-                GROUP_CONCAT(DISTINCT p.code) as projects
-            FROM v_contacts_full cf
-            LEFT JOIN contact_channels cc ON cf.id = cc.contact_id
-            LEFT JOIN contact_projects cp ON cf.id = cp.contact_id AND cp.is_active = 1
-            LEFT JOIN projects p ON cp.project_id = p.id AND p.is_active = 1
-            WHERE cf.display_name LIKE ? COLLATE NOCASE
-               OR cf.first_name LIKE ? COLLATE NOCASE
-               OR cf.last_name LIKE ? COLLATE NOCASE
-               OR cf.organization LIKE ? COLLATE NOCASE
-               OR cf.country LIKE ? COLLATE NOCASE
-               OR cf.job_title LIKE ? COLLATE NOCASE
-               OR cc.channel_value LIKE ? COLLATE NOCASE
-               OR p.code LIKE ? COLLATE NOCASE
-               OR p.description LIKE ? COLLATE NOCASE
-            GROUP BY cf.id
-            ORDER BY cf.display_name
-            LIMIT ?
-            """,
-            (search_pattern,) * 9 + (limit,)
-        )
-        results = []
-        for row in cursor.fetchall():
-            item = dict(row)
-            item['match_score'] = 100  # LIKE match
-            item['matched_field'] = 'like'
-            # Convert projects string to list
-            if item.get('projects'):
-                item['projects'] = [p.strip() for p in item['projects'].split(',') if p.strip()]
-            results.append(item)
-        return results
+    Search contacts across multiple fields including project assignments.
 
+    Searchable fields:
+        1. Name: first_name, last_name, display_name
+        2. Organization: organization, country, job_title
+        3. Channels: email, telegram_username (@), phone
+        4. Projects: project code, project description
 
-def _contact_search_fuzzy(query: str, limit: int = 20, threshold: int = 60) -> list[dict]:
-    """
-    Fuzzy search using rapidfuzz.
-    
-    Search priority:
-    1. Contact fields: display_name, first_name, last_name
-    2. Organization, country, job_title
-    3. Channels: email, telegram, phone
-    4. Projects: code, description (via contact_projects)
+    Args:
+        query: Search string (case-insensitive)
+        limit: Max results (default 20)
+        threshold: Min fuzzy score 0-100 (default 60)
+
+    Returns:
+        List of contacts with match_score and matched_field
     """
     query = query.strip()
     if not query:
         return []
-    
-    # Clean query for telegram search (handle @username)
-    query_clean = query.lstrip('@').lower()
-    
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        
-        # Get all active contacts with their channels AND projects
-        cursor.execute("""
-            SELECT 
+
+    if FUZZY_AVAILABLE:
+        return await _contact_search_fuzzy(query, limit, threshold)
+    else:
+        return await _contact_search_like(query, limit)
+
+
+async def _contact_search_like(query: str, limit: int = 20) -> list[dict]:
+    """ILIKE-based search (fallback when rapidfuzz not available)."""
+    query = query.lstrip('@')
+    search_pattern = f"%{query}%"
+
+    async with get_db() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT DISTINCT ON (cf.id)
                 cf.*,
-                GROUP_CONCAT(DISTINCT
-                    CASE 
-                        WHEN cc.channel_type = 'telegram_username' THEN '@' || cc.channel_value
-                        ELSE cc.channel_value 
-                    END, 
-                    '||'
-                ) as all_channels,
-                GROUP_CONCAT(DISTINCT cc.channel_type || ':' || cc.channel_value, '||') as channel_details,
-                GROUP_CONCAT(DISTINCT p.code, '||') as project_codes,
-                GROUP_CONCAT(DISTINCT p.description, '||') as project_descriptions
+                ARRAY_AGG(DISTINCT p.code) FILTER (WHERE p.code IS NOT NULL) as projects
             FROM v_contacts_full cf
             LEFT JOIN contact_channels cc ON cf.id = cc.contact_id
-            LEFT JOIN contact_projects cp ON cf.id = cp.contact_id AND cp.is_active = 1
-            LEFT JOIN projects p ON cp.project_id = p.id AND p.is_active = 1
-            GROUP BY cf.id
+            LEFT JOIN contact_projects cp ON cf.id = cp.contact_id AND cp.is_active = TRUE
+            LEFT JOIN projects p ON cp.project_id = p.id AND p.is_active = TRUE
+            WHERE cf.display_name ILIKE $1
+               OR cf.first_name ILIKE $1
+               OR cf.last_name ILIKE $1
+               OR cf.organization ILIKE $1
+               OR cf.country ILIKE $1
+               OR cf.job_title ILIKE $1
+               OR cc.channel_value ILIKE $1
+               OR p.code ILIKE $1
+               OR p.description ILIKE $1
+            GROUP BY cf.id, cf.first_name, cf.last_name, cf.display_name, cf.organization_id,
+                     cf.organization_name, cf.org_type, cf.organization, cf.organization_type,
+                     cf.job_title, cf.department, cf.country, cf.city, cf.timezone,
+                     cf.preferred_channel, cf.preferred_language, cf.context,
+                     cf.relationship_type, cf.relationship_strength, cf.last_interaction_date,
+                     cf.primary_email, cf.primary_phone, cf.telegram_chat_id,
+                     cf.telegram_username, cf.teams_chat_id, cf.notes, cf.created_at, cf.updated_at
+            ORDER BY cf.id, cf.display_name
+            LIMIT $2
+            """,
+            search_pattern, limit
+        )
+
+        results = []
+        for row in rows:
+            item = dict(row)
+            item['match_score'] = 100
+            item['matched_field'] = 'like'
+            results.append(item)
+        return results
+
+
+async def _contact_search_fuzzy(query: str, limit: int = 20, threshold: int = 60) -> list[dict]:
+    """Fuzzy search using rapidfuzz."""
+    query_clean = query.lstrip('@').lower()
+
+    async with get_db() as conn:
+        rows = await conn.fetch("""
+            SELECT
+                cf.*,
+                STRING_AGG(DISTINCT
+                    CASE
+                        WHEN cc.channel_type = 'telegram_username' THEN '@' || cc.channel_value
+                        ELSE cc.channel_value
+                    END,
+                    '||'
+                ) as all_channels,
+                STRING_AGG(DISTINCT cc.channel_type || ':' || cc.channel_value, '||') as channel_details,
+                STRING_AGG(DISTINCT p.code, '||') as project_codes,
+                STRING_AGG(DISTINCT p.description, '||') as project_descriptions
+            FROM v_contacts_full cf
+            LEFT JOIN contact_channels cc ON cf.id = cc.contact_id
+            LEFT JOIN contact_projects cp ON cf.id = cp.contact_id AND cp.is_active = TRUE
+            LEFT JOIN projects p ON cp.project_id = p.id AND p.is_active = TRUE
+            GROUP BY cf.id, cf.first_name, cf.last_name, cf.display_name, cf.organization_id,
+                     cf.organization_name, cf.org_type, cf.organization, cf.organization_type,
+                     cf.job_title, cf.department, cf.country, cf.city, cf.timezone,
+                     cf.preferred_channel, cf.preferred_language, cf.context,
+                     cf.relationship_type, cf.relationship_strength, cf.last_interaction_date,
+                     cf.primary_email, cf.primary_phone, cf.telegram_chat_id,
+                     cf.telegram_username, cf.teams_chat_id, cf.notes, cf.created_at, cf.updated_at
         """)
-        
-        contacts = [dict(row) for row in cursor.fetchall()]
-    
+
+    contacts = [dict(row) for row in rows]
     if not contacts:
         return []
-    
+
     results = []
-    
+
     for contact in contacts:
-        # Fields to search with priorities
         search_fields = {
-            # Priority 1: Name fields
             'name': contact.get('display_name') or '',
             'first_name': contact.get('first_name') or '',
             'last_name': contact.get('last_name') or '',
-            # Priority 2: Organization/location
             'organization': contact.get('organization') or '',
             'country': contact.get('country') or '',
             'job_title': contact.get('job_title') or '',
         }
-        
+
         # Parse channels
         channel_details = contact.get('channel_details') or ''
         if channel_details:
@@ -636,7 +414,7 @@ def _contact_search_fuzzy(query: str, limit: int = 20, threshold: int = 60) -> l
                         search_fields['telegram'] = f'@{ch_value}'
                     elif ch_type == 'phone':
                         search_fields['phone'] = ch_value
-        
+
         # Add project fields
         project_codes = contact.get('project_codes') or ''
         project_descriptions = contact.get('project_descriptions') or ''
@@ -644,87 +422,42 @@ def _contact_search_fuzzy(query: str, limit: int = 20, threshold: int = 60) -> l
             search_fields['project_code'] = project_codes.replace('||', ' ')
         if project_descriptions:
             search_fields['project'] = project_descriptions.replace('||', ' ')
-        
+
         # Find best match
         best_score = 0
         best_field = None
-        
+
         for field_name, field_value in search_fields.items():
             if not field_value:
                 continue
-            
+
             score_partial = fuzz.partial_ratio(query_clean, field_value.lower())
             score_token = fuzz.token_set_ratio(query_clean, field_value.lower())
             score = max(score_partial, score_token)
-            
+
             if score > best_score:
                 best_score = score
                 best_field = field_name
-        
+
         if best_score >= threshold:
-            contact_result = {k: v for k, v in contact.items() 
-                            if k not in ('all_channels', 'channel_details', 
+            contact_result = {k: v for k, v in contact.items()
+                            if k not in ('all_channels', 'channel_details',
                                         'project_codes', 'project_descriptions')}
             contact_result['match_score'] = best_score
             contact_result['matched_field'] = best_field
-            # Add project info for context
             if project_codes:
                 contact_result['projects'] = [p for p in project_codes.split('||') if p]
             results.append(contact_result)
-    
+
     results.sort(key=lambda x: (-x['match_score'], x.get('display_name', '')))
     return results[:limit]
-
-
-def contact_search(
-    query: str, 
-    limit: int = 20,
-    threshold: int = 60
-) -> list[dict]:
-    """
-    Search contacts across multiple fields including project assignments.
-    
-    Uses rapidfuzz for fuzzy matching if available, 
-    falls back to SQL LIKE otherwise.
-    
-    Searchable fields (priority order):
-        1. Name: first_name, last_name, display_name
-        2. Organization: organization, country, job_title
-        3. Channels: email, telegram_username (@), phone
-        4. Projects: project code, project description
-    
-    Args:
-        query: Search string (case-insensitive, fuzzy if rapidfuzz installed)
-        limit: Max results (default 20)
-        threshold: Min fuzzy score 0-100 (default 60, ignored for LIKE)
-    
-    Returns:
-        List of contacts with:
-        - match_score: 0-100 (100 for LIKE matches)
-        - matched_field: which field matched
-        - projects: list of project codes contact is assigned to
-    
-    Examples:
-        - "Altynbek" → finds by name
-        - "CSUM" → finds contacts assigned to CSUM project
-        - "@altynbek" → finds by telegram username
-        - "Nepal" → finds contacts in Nepal OR on Nepal project
-    """
-    query = query.strip()
-    if not query:
-        return []
-    
-    if FUZZY_AVAILABLE:
-        return _contact_search_fuzzy(query, limit, threshold)
-    else:
-        return _contact_search_like(query, limit)
 
 
 # =============================================================================
 # CHANNELS CRUD
 # =============================================================================
 
-def channel_add(
+async def channel_add(
     contact_id: int,
     channel_type: str,
     channel_value: str,
@@ -735,34 +468,33 @@ def channel_add(
     """Add a channel to a contact."""
     if channel_type not in CHANNEL_TYPES:
         raise ValueError(f"Invalid channel_type. Must be one of: {CHANNEL_TYPES}")
-    
+
     # Clean telegram username
     if channel_type == 'telegram_username':
         channel_value = channel_value.lstrip('@')
-    
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        
+
+    async with get_db() as conn:
         # If setting as primary, unset other primaries of same type
         if is_primary:
-            cursor.execute(
+            await conn.execute(
                 """
-                UPDATE contact_channels 
-                SET is_primary = 0 
-                WHERE contact_id = ? AND channel_type = ?
+                UPDATE contact_channels
+                SET is_primary = FALSE
+                WHERE contact_id = $1 AND channel_type = $2
                 """,
-                (contact_id, channel_type)
+                contact_id, channel_type
             )
-        
-        cursor.execute(
+
+        row = await conn.fetchrow(
             """
             INSERT INTO contact_channels (contact_id, channel_type, channel_value, channel_label, is_primary, notes)
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING id
             """,
-            (contact_id, channel_type, channel_value, channel_label, int(is_primary), notes)
+            contact_id, channel_type, channel_value, channel_label, is_primary, notes
         )
         return {
-            "id": cursor.lastrowid,
+            "id": row['id'],
             "contact_id": contact_id,
             "channel_type": channel_type,
             "channel_value": channel_value,
@@ -772,91 +504,78 @@ def channel_add(
         }
 
 
-def channel_list(contact_id: int) -> list[dict]:
+async def channel_list(contact_id: int) -> list[dict]:
     """List all channels for a contact."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM contact_channels WHERE contact_id = ? ORDER BY channel_type, is_primary DESC",
-            (contact_id,)
+    async with get_db() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM contact_channels WHERE contact_id = $1 ORDER BY channel_type, is_primary DESC",
+            contact_id
         )
-        results = []
-        for row in cursor.fetchall():
-            item = dict(row)
-            item["is_primary"] = bool(item["is_primary"])
-            results.append(item)
-        return results
+        return [dict(row) for row in rows]
 
 
-def channel_get(id: int) -> Optional[dict]:
+async def channel_get(id: int) -> Optional[dict]:
     """Get channel by id."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM contact_channels WHERE id = ?", (id,))
-        row = cursor.fetchone()
-        if row:
-            item = dict(row)
-            item["is_primary"] = bool(item["is_primary"])
-            return item
-        return None
+    async with get_db() as conn:
+        row = await conn.fetchrow("SELECT * FROM contact_channels WHERE id = $1", id)
+        return dict(row) if row else None
 
 
-def channel_update(id: int, **kwargs) -> Optional[dict]:
+async def channel_update(id: int, **kwargs) -> Optional[dict]:
     """Update channel by id."""
     allowed_fields = {'channel_value', 'channel_label', 'is_primary', 'notes'}
     updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
-    
+
     if not updates:
-        return channel_get(id)
-    
-    # Get current channel info for primary logic
-    current = channel_get(id)
+        return await channel_get(id)
+
+    current = await channel_get(id)
     if not current:
         return None
-    
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        
+
+    async with get_db() as conn:
         # If setting as primary, unset other primaries
         if updates.get('is_primary'):
-            cursor.execute(
+            await conn.execute(
                 """
-                UPDATE contact_channels 
-                SET is_primary = 0 
-                WHERE contact_id = ? AND channel_type = ? AND id != ?
+                UPDATE contact_channels
+                SET is_primary = FALSE
+                WHERE contact_id = $1 AND channel_type = $2 AND id != $3
                 """,
-                (current['contact_id'], current['channel_type'], id)
+                current['contact_id'], current['channel_type'], id
             )
-            updates['is_primary'] = 1
-        elif 'is_primary' in updates:
-            updates['is_primary'] = int(updates['is_primary'])
-        
-        set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
-        values = list(updates.values()) + [id]
-        
-        cursor.execute(f"UPDATE contact_channels SET {set_clause} WHERE id = ?", values)
-    # Fetch after commit
-    return channel_get(id)
+
+        set_parts = []
+        values = []
+        for i, (k, v) in enumerate(updates.items(), 1):
+            set_parts.append(f"{k} = ${i}")
+            values.append(v)
+
+        values.append(id)
+        set_clause = ", ".join(set_parts)
+
+        await conn.execute(f"UPDATE contact_channels SET {set_clause} WHERE id = ${len(values)}", *values)
+
+    return await channel_get(id)
 
 
-def channel_delete(id: int) -> bool:
+async def channel_delete(id: int) -> bool:
     """Delete channel by id."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM contact_channels WHERE id = ?", (id,))
-        return cursor.rowcount > 0
+    async with get_db() as conn:
+        result = await conn.execute("DELETE FROM contact_channels WHERE id = $1", id)
+        return result != "DELETE 0"
 
 
-def channel_set_primary(id: int) -> Optional[dict]:
+async def channel_set_primary(id: int) -> Optional[dict]:
     """Set channel as primary (unsets others of same type)."""
-    return channel_update(id, is_primary=True)
+    return await channel_update(id, is_primary=True)
 
 
 # =============================================================================
 # PROJECT ASSIGNMENTS CRUD
 # =============================================================================
 
-def assignment_add(
+async def assignment_add(
     contact_id: int,
     project_id: int,
     role_code: str,
@@ -866,151 +585,132 @@ def assignment_add(
     notes: Optional[str] = None
 ) -> dict:
     """Add a project assignment to a contact."""
-    # Validate role exists
-    role = role_get(role_code)
+    role = await role_get(role_code)
     if not role:
         raise ValueError(f"Invalid role_code: {role_code}")
-    
-    # Validate project exists (if projects table exists)
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='projects'"
-        )
-        if cursor.fetchone():
-            cursor.execute("SELECT id FROM projects WHERE id = ?", (project_id,))
-            if not cursor.fetchone():
-                raise ValueError(f"Project {project_id} not found")
-        
-        cursor.execute(
+
+    async with get_db() as conn:
+        # Validate project exists
+        project = await conn.fetchrow("SELECT id FROM projects WHERE id = $1", project_id)
+        if not project:
+            raise ValueError(f"Project {project_id} not found")
+
+        row = await conn.fetchrow(
             """
-            INSERT INTO contact_projects 
+            INSERT INTO contact_projects
             (contact_id, project_id, role_code, start_date, end_date, workdays_allocated, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            RETURNING id
             """,
-            (contact_id, project_id, role_code.upper(), start_date, end_date, workdays_allocated, notes)
+            contact_id, project_id, role_code.upper(), start_date, end_date, workdays_allocated, notes
         )
-        new_id = cursor.lastrowid
-    # Fetch after commit
-    return assignment_get(new_id)
+        return await assignment_get(row['id'])
 
 
-def assignment_get(id: int) -> Optional[dict]:
+async def assignment_get(id: int) -> Optional[dict]:
     """Get assignment by id."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM v_contact_projects WHERE id = ?", (id,))
-        row = cursor.fetchone()
-        if row:
-            item = dict(row)
-            item["is_active"] = bool(item["is_active"])
-            return item
-        return None
+    async with get_db() as conn:
+        row = await conn.fetchrow("SELECT * FROM v_contact_projects WHERE id = $1", id)
+        return dict(row) if row else None
 
 
-def assignment_list(
+async def assignment_list(
     contact_id: Optional[int] = None,
     project_id: Optional[int] = None,
     role_code: Optional[str] = None,
     active_only: bool = True
 ) -> list[dict]:
     """List project assignments with optional filters."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        
+    async with get_db() as conn:
         conditions = []
         params = []
-        
+        param_idx = 1
+
         if contact_id:
-            conditions.append("contact_id = ?")
+            conditions.append(f"contact_id = ${param_idx}")
             params.append(contact_id)
+            param_idx += 1
         if project_id:
-            conditions.append("project_id = ?")
+            conditions.append(f"project_id = ${param_idx}")
             params.append(project_id)
+            param_idx += 1
         if role_code:
-            conditions.append("role_code = ?")
+            conditions.append(f"role_code = ${param_idx}")
             params.append(role_code.upper())
+            param_idx += 1
         if active_only:
-            conditions.append("is_active = 1")
-        
+            conditions.append("is_active = TRUE")
+
         query = "SELECT * FROM v_contact_projects"
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
-        
-        cursor.execute(query, params)
-        results = []
-        for row in cursor.fetchall():
-            item = dict(row)
-            item["is_active"] = bool(item["is_active"])
-            results.append(item)
-        return results
+
+        rows = await conn.fetch(query, *params)
+        return [dict(row) for row in rows]
 
 
-def assignment_update(id: int, **kwargs) -> Optional[dict]:
+async def assignment_update(id: int, **kwargs) -> Optional[dict]:
     """Update assignment by id."""
     allowed_fields = {'role_code', 'start_date', 'end_date', 'is_active', 'workdays_allocated', 'notes'}
     updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
-    
+
     if not updates:
-        return assignment_get(id)
-    
+        return await assignment_get(id)
+
     if 'role_code' in updates:
         updates['role_code'] = updates['role_code'].upper()
-        if not role_get(updates['role_code']):
+        role = await role_get(updates['role_code'])
+        if not role:
             raise ValueError(f"Invalid role_code: {updates['role_code']}")
-    
-    if 'is_active' in updates:
-        updates['is_active'] = int(updates['is_active'])
-    
-    set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
-    values = list(updates.values()) + [id]
-    
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(f"UPDATE contact_projects SET {set_clause} WHERE id = ?", values)
-        updated = cursor.rowcount > 0
-    # Fetch after commit
-    if not updated:
-        return None
-    return assignment_get(id)
+
+    set_parts = []
+    values = []
+    for i, (k, v) in enumerate(updates.items(), 1):
+        set_parts.append(f"{k} = ${i}")
+        values.append(v)
+
+    values.append(id)
+    set_clause = ", ".join(set_parts)
+
+    async with get_db() as conn:
+        result = await conn.execute(f"UPDATE contact_projects SET {set_clause} WHERE id = ${len(values)}", *values)
+        if result == "UPDATE 0":
+            return None
+
+    return await assignment_get(id)
 
 
-def assignment_delete(id: int) -> bool:
+async def assignment_delete(id: int) -> bool:
     """Delete assignment by id."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM contact_projects WHERE id = ?", (id,))
-        return cursor.rowcount > 0
+    async with get_db() as conn:
+        result = await conn.execute("DELETE FROM contact_projects WHERE id = $1", id)
+        return result != "DELETE 0"
 
 
 # =============================================================================
-# ROLES (Read-only, populated on init)
+# ROLES (Read-only, populated via schema.sql)
 # =============================================================================
 
-def role_list(category: Optional[str] = None) -> list[dict]:
+async def role_list(category: Optional[str] = None) -> list[dict]:
     """List all project roles."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        
+    async with get_db() as conn:
         if category:
             if category not in ROLE_CATEGORIES:
                 raise ValueError(f"Invalid category. Must be one of: {ROLE_CATEGORIES}")
-            cursor.execute(
-                "SELECT * FROM project_roles WHERE role_category = ? ORDER BY role_code",
-                (category,)
+            rows = await conn.fetch(
+                "SELECT * FROM project_roles WHERE role_category = $1 ORDER BY role_code",
+                category
             )
         else:
-            cursor.execute("SELECT * FROM project_roles ORDER BY role_category, role_code")
-        
-        return [dict(row) for row in cursor.fetchall()]
+            rows = await conn.fetch("SELECT * FROM project_roles ORDER BY role_category, role_code")
+
+        return [dict(row) for row in rows]
 
 
-def role_get(code: str) -> Optional[dict]:
+async def role_get(code: str) -> Optional[dict]:
     """Get role by code."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM project_roles WHERE role_code = ?", (code.upper(),))
-        row = cursor.fetchone()
+    async with get_db() as conn:
+        row = await conn.fetchrow("SELECT * FROM project_roles WHERE role_code = $1", code.upper())
         return dict(row) if row else None
 
 
@@ -1018,17 +718,25 @@ def role_get(code: str) -> Optional[dict]:
 # PROJECT TEAM (convenience functions)
 # =============================================================================
 
-def get_project_team(project_id: int) -> list[dict]:
+async def get_project_team(project_id: int) -> list[dict]:
     """Get full team for a project with contact details."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM v_project_team WHERE project_id = ?",
-            (project_id,)
+    async with get_db() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM v_project_team WHERE project_id = $1",
+            project_id
         )
-        return [dict(row) for row in cursor.fetchall()]
+        return [dict(row) for row in rows]
 
 
-def get_contact_projects(contact_id: int) -> list[dict]:
+async def get_contact_projects(contact_id: int) -> list[dict]:
     """Get all projects for a contact."""
-    return assignment_list(contact_id=contact_id)
+    return await assignment_list(contact_id=contact_id)
+
+
+# =============================================================================
+# Compatibility placeholders
+# =============================================================================
+
+def get_database_path():
+    """Placeholder - not used with PostgreSQL."""
+    return None

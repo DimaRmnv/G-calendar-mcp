@@ -1,26 +1,20 @@
 """
-Database management for projects and organizations.
+Database management for projects and organizations using PostgreSQL.
 
-Supports both SQLite (local mode) and PostgreSQL (cloud mode).
-Database location:
-- SQLite: ~/.mcp/google-calendar/time_tracking.db
-- PostgreSQL: google_calendar_mcp database
+Uses shared connection pool from google_calendar.db.connection.
+Schema managed via google_calendar/db/schema.sql.
 
 Schema version 2:
 - Organizations table with M:N relationship to projects
-- Tasks linked to phases (not projects) for proper hierarchy: PROJECT → PHASE → TASK
+- Tasks linked to phases (not projects) for proper hierarchy: PROJECT -> PHASE -> TASK
 - Extended project fields (full_name, country, sector, dates, contract info)
 """
 
-import sqlite3
-from pathlib import Path
 from typing import Optional
-from contextlib import contextmanager
 
-from google_calendar.utils.config import get_app_dir
+from google_calendar.db.connection import get_db, check_db_exists
 
 
-DATABASE_NAME = "time_tracking.db"
 SCHEMA_VERSION = 2
 
 # Organization types for organizations table
@@ -39,413 +33,27 @@ ORG_ROLES = (
 RELATIONSHIP_STATUSES = ('prospect', 'active', 'dormant', 'former')
 
 
-def _is_cloud_mode() -> bool:
-    """Check if running in cloud mode (PostgreSQL configured)."""
-    try:
-        from google_calendar.db.connection import is_postgres_configured
-        return is_postgres_configured()
-    except ImportError:
-        return False
+async def database_exists() -> bool:
+    """Check if database tables exist."""
+    return await check_db_exists()
 
 
-# =============================================================================
-# SQLite Implementation (Local Mode)
-# =============================================================================
-
-def get_database_path() -> Path:
-    """Get path to time tracking database."""
-    return get_app_dir() / DATABASE_NAME
-
-
-def database_exists() -> bool:
-    """Check if database file exists."""
-    if _is_cloud_mode():
-        return True  # PostgreSQL schema is managed separately
-    return get_database_path().exists()
-
-
-@contextmanager
-def get_connection():
-    """Context manager for database connections (SQLite)."""
-    conn = sqlite3.connect(get_database_path())
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
-
-
-def init_database() -> None:
-    """Initialize database with schema v2.
-
-    Creates tables:
-    - schema_version: tracks schema version for migrations
-    - organizations: organization registry with types and relationships
-    - projects: extended with business fields (full_name, country, sector, dates)
-    - project_organizations: M:N relationship between projects and organizations
-    - phases: project phases
-    - tasks: linked to phases (not projects) for proper hierarchy
-    - norms, exclusions, settings: time tracking config
-
-    All entities have integer id as primary key for batch operations.
-    """
-    with get_connection() as conn:
-        cursor = conn.cursor()
-
-        # Schema version tracking
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS schema_version (
-                version INTEGER PRIMARY KEY,
-                applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        cursor.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
-
-        # Organizations table
-        cursor.execute(f"""
-            CREATE TABLE IF NOT EXISTS organizations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                short_name TEXT,
-                name_local TEXT,
-                organization_type TEXT CHECK(organization_type IN {ORGANIZATION_TYPES}),
-                parent_org_id INTEGER REFERENCES organizations(id),
-                country TEXT,
-                city TEXT,
-                website TEXT,
-                context TEXT,
-                relationship_status TEXT CHECK(relationship_status IN {RELATIONSHIP_STATUSES}),
-                first_contact_date DATE,
-                is_active INTEGER DEFAULT 1,
-                notes TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        # Projects table - extended with business fields
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS projects (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                code TEXT NOT NULL,
-                full_name TEXT,
-                description TEXT NOT NULL,
-                country TEXT,
-                sector TEXT,
-                is_billable INTEGER NOT NULL DEFAULT 0,
-                is_active INTEGER NOT NULL DEFAULT 1,
-                position TEXT,
-                structure_level INTEGER NOT NULL DEFAULT 1,
-                start_date DATE,
-                end_date DATE,
-                contract_value DECIMAL(15,2),
-                currency TEXT DEFAULT 'EUR',
-                context TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        # Project-Organizations M:N junction table
-        cursor.execute(f"""
-            CREATE TABLE IF NOT EXISTS project_organizations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-                organization_id INTEGER NOT NULL REFERENCES organizations(id),
-                org_role TEXT NOT NULL CHECK(org_role IN {ORG_ROLES}),
-                contract_value DECIMAL(15,2),
-                currency TEXT DEFAULT 'EUR',
-                is_lead INTEGER DEFAULT 0,
-                start_date DATE,
-                end_date DATE,
-                notes TEXT,
-                UNIQUE(project_id, organization_id, org_role)
-            )
-        """)
-
-        # Phases table - references project by id
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS phases (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                project_id INTEGER NOT NULL,
-                code TEXT NOT NULL,
-                description TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
-                UNIQUE(project_id, code)
-            )
-        """)
-
-        # Tasks table - v2: references PHASE by id (not project)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS tasks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                phase_id INTEGER NOT NULL,
-                code TEXT NOT NULL,
-                description TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (phase_id) REFERENCES phases(id) ON DELETE CASCADE,
-                UNIQUE(phase_id, code)
-            )
-        """)
-
-        # Workday norms table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS norms (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                year INTEGER NOT NULL,
-                month INTEGER NOT NULL,
-                hours REAL NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(year, month)
-            )
-        """)
-
-        # Exclusions table (event patterns to skip)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS exclusions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                pattern TEXT NOT NULL UNIQUE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        # Settings table (key-value, no id needed)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        # Create indexes
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_organizations_type ON organizations(organization_type)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_organizations_country ON organizations(country)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_organizations_status ON organizations(relationship_status)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_projects_code ON projects(code)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_projects_active ON projects(is_active)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_projects_country ON projects(country)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_project_orgs_project ON project_organizations(project_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_project_orgs_org ON project_organizations(organization_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_phases_project ON phases(project_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_tasks_phase ON tasks(phase_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_norms_year_month ON norms(year, month)")
-
-        # Insert default settings
-        default_settings = [
-            ("work_calendar", "primary"),
-            ("billable_target_type", "percent"),
-            ("billable_target_value", "75"),
-            ("base_location", ""),
-        ]
-
-        for key, value in default_settings:
-            cursor.execute(
-                "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
-                (key, value)
-            )
-
-        # Insert default exclusions
-        default_exclusions = ["Away", "Lunch", "Offline", "Out of office"]
-        for pattern in default_exclusions:
-            cursor.execute(
-                "INSERT OR IGNORE INTO exclusions (pattern) VALUES (?)",
-                (pattern,)
-            )
-
-
-def _migrate_v1_to_v2() -> None:
-    """Migrate database from v1 to v2 schema.
-
-    Changes:
-    - Add organizations table
-    - Add project_organizations M:N table
-    - Add extended fields to projects
-    - Migrate tasks from project_id to phase_id
-    """
-    with get_connection() as conn:
-        cursor = conn.cursor()
-
-        # Check current schema version
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'")
-        if not cursor.fetchone():
-            # Create schema_version table
-            cursor.execute("""
-                CREATE TABLE schema_version (
-                    version INTEGER PRIMARY KEY,
-                    applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            cursor.execute("INSERT INTO schema_version (version) VALUES (1)")
-
-        cursor.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1")
-        row = cursor.fetchone()
-        current_version = row[0] if row else 1
-
-        if current_version >= SCHEMA_VERSION:
-            return  # Already migrated
-
-        # Add is_active to projects if missing (v1.x migration)
-        cursor.execute("PRAGMA table_info(projects)")
-        project_columns = [col[1] for col in cursor.fetchall()]
-
-        if "is_active" not in project_columns:
-            cursor.execute("ALTER TABLE projects ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
-
-        # Create organizations table if missing
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='organizations'")
-        if not cursor.fetchone():
-            cursor.execute(f"""
-                CREATE TABLE organizations (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL UNIQUE,
-                    short_name TEXT,
-                    name_local TEXT,
-                    organization_type TEXT CHECK(organization_type IN {ORGANIZATION_TYPES}),
-                    parent_org_id INTEGER REFERENCES organizations(id),
-                    country TEXT,
-                    city TEXT,
-                    website TEXT,
-                    context TEXT,
-                    relationship_status TEXT CHECK(relationship_status IN {RELATIONSHIP_STATUSES}),
-                    first_contact_date DATE,
-                    is_active INTEGER DEFAULT 1,
-                    notes TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            cursor.execute("CREATE INDEX idx_organizations_type ON organizations(organization_type)")
-            cursor.execute("CREATE INDEX idx_organizations_country ON organizations(country)")
-            cursor.execute("CREATE INDEX idx_organizations_status ON organizations(relationship_status)")
-
-        # Create project_organizations table if missing
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='project_organizations'")
-        if not cursor.fetchone():
-            cursor.execute(f"""
-                CREATE TABLE project_organizations (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-                    organization_id INTEGER NOT NULL REFERENCES organizations(id),
-                    org_role TEXT NOT NULL CHECK(org_role IN {ORG_ROLES}),
-                    contract_value DECIMAL(15,2),
-                    currency TEXT DEFAULT 'EUR',
-                    is_lead INTEGER DEFAULT 0,
-                    start_date DATE,
-                    end_date DATE,
-                    notes TEXT,
-                    UNIQUE(project_id, organization_id, org_role)
-                )
-            """)
-            cursor.execute("CREATE INDEX idx_project_orgs_project ON project_organizations(project_id)")
-            cursor.execute("CREATE INDEX idx_project_orgs_org ON project_organizations(organization_id)")
-
-        # Add new columns to projects
-        new_project_cols = ['full_name', 'country', 'sector', 'start_date', 'end_date',
-                          'contract_value', 'currency', 'context']
-        for col in new_project_cols:
-            if col not in project_columns:
-                if col == 'currency':
-                    cursor.execute(f"ALTER TABLE projects ADD COLUMN {col} TEXT DEFAULT 'EUR'")
-                elif col in ('contract_value',):
-                    cursor.execute(f"ALTER TABLE projects ADD COLUMN {col} DECIMAL(15,2)")
-                elif col in ('start_date', 'end_date'):
-                    cursor.execute(f"ALTER TABLE projects ADD COLUMN {col} DATE")
-                else:
-                    cursor.execute(f"ALTER TABLE projects ADD COLUMN {col} TEXT")
-
-        # Add updated_at to phases if missing
-        cursor.execute("PRAGMA table_info(phases)")
-        phase_columns = [col[1] for col in cursor.fetchall()]
-        if "updated_at" not in phase_columns:
-            # SQLite doesn't allow non-constant defaults in ALTER TABLE, so add with NULL default
-            cursor.execute("ALTER TABLE phases ADD COLUMN updated_at TIMESTAMP")
-            cursor.execute("UPDATE phases SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL")
-
-        # Migrate tasks from project_id to phase_id
-        cursor.execute("PRAGMA table_info(tasks)")
-        task_columns = [col[1] for col in cursor.fetchall()]
-
-        if "project_id" in task_columns and "phase_id" not in task_columns:
-            # Need to migrate tasks to phases
-            # Step 1: Create default phase for each project that has tasks
-            cursor.execute("""
-                INSERT INTO phases (project_id, code, description)
-                SELECT DISTINCT t.project_id, 'DEFAULT', 'Default phase (migrated)'
-                FROM tasks t
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM phases p WHERE p.project_id = t.project_id
-                )
-            """)
-
-            # Step 2: Create new tasks table with phase_id
-            cursor.execute("""
-                CREATE TABLE tasks_new (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    phase_id INTEGER NOT NULL,
-                    code TEXT NOT NULL,
-                    description TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (phase_id) REFERENCES phases(id) ON DELETE CASCADE,
-                    UNIQUE(phase_id, code)
-                )
-            """)
-
-            # Step 3: Migrate tasks to first phase of their project
-            cursor.execute("""
-                INSERT INTO tasks_new (id, phase_id, code, description, created_at)
-                SELECT
-                    t.id,
-                    (SELECT p.id FROM phases p WHERE p.project_id = t.project_id ORDER BY p.id LIMIT 1),
-                    t.code,
-                    t.description,
-                    t.created_at
-                FROM tasks t
-            """)
-
-            # Step 4: Replace tables
-            cursor.execute("DROP TABLE tasks")
-            cursor.execute("ALTER TABLE tasks_new RENAME TO tasks")
-            cursor.execute("CREATE INDEX idx_tasks_phase ON tasks(phase_id)")
-
-        # Update schema version
-        cursor.execute("INSERT OR REPLACE INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
-
-
-def ensure_database() -> bool:
-    """Ensure database exists and is initialized. Returns True if newly created."""
-    if _is_cloud_mode():
-        return False  # PostgreSQL schema managed separately
-    newly_created = not database_exists()
-    if newly_created:
-        init_database()
-    else:
-        # Run migrations for existing database
-        _migrate_v1_to_v2()
-    return newly_created
+async def ensure_database() -> bool:
+    """Ensure database exists. Schema is managed via schema.sql."""
+    return await database_exists()
 
 
 # =============================================================================
 # Projects CRUD
 # =============================================================================
 
-def project_add(
+async def project_add(
     code: str,
     description: str,
     is_billable: bool = False,
     is_active: bool = True,
     position: Optional[str] = None,
     structure_level: int = 1,
-    # v2 fields
     full_name: Optional[str] = None,
     country: Optional[str] = None,
     sector: Optional[str] = None,
@@ -456,109 +64,101 @@ def project_add(
     context: Optional[str] = None,
 ) -> dict:
     """Create a new project with v2 business fields. Returns created project with id."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
+    async with get_db() as conn:
+        row = await conn.fetchrow(
             """
             INSERT INTO projects (code, description, is_billable, is_active, position, structure_level,
                                  full_name, country, sector, start_date, end_date, contract_value, currency, context)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+            RETURNING id
             """,
-            (code.upper(), description, int(is_billable), int(is_active), position, structure_level,
-             full_name, country, sector, start_date, end_date, contract_value, currency, context)
+            code.upper(), description, is_billable, is_active, position, structure_level,
+            full_name, country, sector, start_date, end_date, contract_value, currency, context
         )
-        new_id = cursor.lastrowid
-    return project_get(id=new_id)
+        return await project_get(id=row['id'])
 
 
-def project_get(id: Optional[int] = None, code: Optional[str] = None) -> Optional[dict]:
+async def project_get(id: Optional[int] = None, code: Optional[str] = None) -> Optional[dict]:
     """Get project by id or code."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
+    async with get_db() as conn:
         if id is not None:
-            cursor.execute("SELECT * FROM projects WHERE id = ?", (id,))
+            row = await conn.fetchrow("SELECT * FROM projects WHERE id = $1", id)
         elif code is not None:
-            cursor.execute("SELECT * FROM projects WHERE code = ?", (code.upper(),))
+            row = await conn.fetchrow("SELECT * FROM projects WHERE code = $1", code.upper())
         else:
             return None
-        row = cursor.fetchone()
-        if row:
-            result = dict(row)
-            result["is_billable"] = bool(result["is_billable"])
-            result["is_active"] = bool(result.get("is_active", 1))
-            return result
-        return None
+        return dict(row) if row else None
 
 
-def project_list(billable_only: bool = False, active_only: bool = False) -> list[dict]:
+async def project_list(billable_only: bool = False, active_only: bool = False) -> list[dict]:
     """List all projects."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
+    async with get_db() as conn:
         conditions = []
+        params = []
+        param_idx = 1
+
         if billable_only:
-            conditions.append("is_billable = 1")
+            conditions.append(f"is_billable = ${param_idx}")
+            params.append(True)
+            param_idx += 1
         if active_only:
-            conditions.append("is_active = 1")
+            conditions.append(f"is_active = ${param_idx}")
+            params.append(True)
+            param_idx += 1
 
         query = "SELECT * FROM projects"
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
         query += " ORDER BY code"
 
-        cursor.execute(query)
-        results = []
-        for row in cursor.fetchall():
-            item = dict(row)
-            item["is_billable"] = bool(item["is_billable"])
-            item["is_active"] = bool(item.get("is_active", 1))
-            results.append(item)
-        return results
+        rows = await conn.fetch(query, *params)
+        return [dict(row) for row in rows]
 
 
-def project_update(id: int, **kwargs) -> Optional[dict]:
+async def project_update(id: int, **kwargs) -> Optional[dict]:
     """Update project by id. Supports v2 fields."""
     allowed_fields = {"code", "description", "is_billable", "is_active", "position", "structure_level",
                      "full_name", "country", "sector", "start_date", "end_date", "contract_value", "currency", "context"}
     updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
 
     if not updates:
-        return project_get(id=id)
+        return await project_get(id=id)
 
-    if "is_billable" in updates:
-        updates["is_billable"] = int(updates["is_billable"])
-    if "is_active" in updates:
-        updates["is_active"] = int(updates["is_active"])
     if "code" in updates:
         updates["code"] = updates["code"].upper()
 
-    set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
-    values = list(updates.values()) + [id]
+    set_parts = []
+    values = []
+    for i, (k, v) in enumerate(updates.items(), 1):
+        set_parts.append(f"{k} = ${i}")
+        values.append(v)
 
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            f"UPDATE projects SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            values
+    values.append(id)
+    set_clause = ", ".join(set_parts)
+
+    async with get_db() as conn:
+        result = await conn.execute(
+            f"UPDATE projects SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ${len(values)}",
+            *values
         )
-        if cursor.rowcount == 0:
+        if result == "UPDATE 0":
             return None
-        return project_get(id=id)
+        return await project_get(id=id)
 
 
-def project_delete(id: int) -> bool:
+async def project_delete(id: int) -> bool:
     """Delete project by id (cascades to phases/tasks)."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM projects WHERE id = ?", (id,))
-        return cursor.rowcount > 0
+    async with get_db() as conn:
+        result = await conn.execute("DELETE FROM projects WHERE id = $1", id)
+        return result != "DELETE 0"
 
 
-def project_list_active() -> list[dict]:
+async def project_list_active() -> list[dict]:
     """Get active projects with their phases and tasks."""
-    projects = project_list(active_only=True)
+    projects = await project_list(active_only=True)
     for project in projects:
-        project["phases"] = phase_list(project_id=project["id"])
-        project["tasks"] = task_list(project_id=project["id"])
+        project["phases"] = await phase_list(project_id=project["id"])
+        project["tasks"] = await task_list(project_id=project["id"])
         if project["structure_level"] == 1:
             project["format"] = "PROJECT * Description"
         elif project["structure_level"] == 2:
@@ -572,266 +172,257 @@ def project_list_active() -> list[dict]:
 # Phases CRUD
 # =============================================================================
 
-def phase_add(project_id: int, code: str, description: Optional[str] = None) -> dict:
+async def phase_add(project_id: int, code: str, description: Optional[str] = None) -> dict:
     """Create a new phase for a project."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO phases (project_id, code, description) VALUES (?, ?, ?)",
-            (project_id, code.upper(), description)
+    async with get_db() as conn:
+        row = await conn.fetchrow(
+            "INSERT INTO phases (project_id, code, description) VALUES ($1, $2, $3) RETURNING id",
+            project_id, code.upper(), description
         )
         return {
-            "id": cursor.lastrowid,
+            "id": row['id'],
             "project_id": project_id,
             "code": code.upper(),
             "description": description
         }
 
 
-def phase_get(id: Optional[int] = None, project_id: Optional[int] = None, code: Optional[str] = None) -> Optional[dict]:
+async def phase_get(id: Optional[int] = None, project_id: Optional[int] = None, code: Optional[str] = None) -> Optional[dict]:
     """Get phase by id or by project_id + code."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
+    async with get_db() as conn:
         if id is not None:
-            cursor.execute("SELECT * FROM phases WHERE id = ?", (id,))
+            row = await conn.fetchrow("SELECT * FROM phases WHERE id = $1", id)
         elif project_id is not None and code is not None:
-            cursor.execute(
-                "SELECT * FROM phases WHERE project_id = ? AND code = ?",
-                (project_id, code.upper())
+            row = await conn.fetchrow(
+                "SELECT * FROM phases WHERE project_id = $1 AND code = $2",
+                project_id, code.upper()
             )
         else:
             return None
-        row = cursor.fetchone()
         return dict(row) if row else None
 
 
-def phase_list(project_id: Optional[int] = None) -> list[dict]:
+async def phase_list(project_id: Optional[int] = None) -> list[dict]:
     """List phases, optionally filtered by project."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
+    async with get_db() as conn:
         if project_id is not None:
-            cursor.execute(
-                "SELECT * FROM phases WHERE project_id = ? ORDER BY code",
-                (project_id,)
+            rows = await conn.fetch(
+                "SELECT * FROM phases WHERE project_id = $1 ORDER BY code",
+                project_id
             )
         else:
-            cursor.execute("SELECT * FROM phases ORDER BY project_id, code")
-        return [dict(row) for row in cursor.fetchall()]
+            rows = await conn.fetch("SELECT * FROM phases ORDER BY project_id, code")
+        return [dict(row) for row in rows]
 
 
-def phase_update(id: int, **kwargs) -> Optional[dict]:
+async def phase_update(id: int, **kwargs) -> Optional[dict]:
     """Update phase by id."""
     allowed_fields = {"code", "description"}
     updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
 
     if not updates:
-        return phase_get(id=id)
+        return await phase_get(id=id)
 
     if "code" in updates:
         updates["code"] = updates["code"].upper()
 
-    set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
-    values = list(updates.values()) + [id]
+    set_parts = []
+    values = []
+    for i, (k, v) in enumerate(updates.items(), 1):
+        set_parts.append(f"{k} = ${i}")
+        values.append(v)
 
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(f"UPDATE phases SET {set_clause} WHERE id = ?", values)
-        if cursor.rowcount == 0:
+    values.append(id)
+    set_clause = ", ".join(set_parts)
+
+    async with get_db() as conn:
+        result = await conn.execute(f"UPDATE phases SET {set_clause} WHERE id = ${len(values)}", *values)
+        if result == "UPDATE 0":
             return None
-        return phase_get(id=id)
+        return await phase_get(id=id)
 
 
-def phase_delete(id: int) -> bool:
+async def phase_delete(id: int) -> bool:
     """Delete phase by id."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM phases WHERE id = ?", (id,))
-        return cursor.rowcount > 0
+    async with get_db() as conn:
+        result = await conn.execute("DELETE FROM phases WHERE id = $1", id)
+        return result != "DELETE 0"
 
 
 # =============================================================================
 # Tasks CRUD
 # =============================================================================
 
-def task_add(phase_id: int, code: str, description: Optional[str] = None) -> dict:
+async def task_add(phase_id: int, code: str, description: Optional[str] = None) -> dict:
     """Create a new task for a phase. Tasks are linked to phases, not directly to projects."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO tasks (phase_id, code, description) VALUES (?, ?, ?)",
-            (phase_id, code.upper(), description)
+    async with get_db() as conn:
+        row = await conn.fetchrow(
+            "INSERT INTO tasks (phase_id, code, description) VALUES ($1, $2, $3) RETURNING id",
+            phase_id, code.upper(), description
         )
-        new_id = cursor.lastrowid
-    return task_get(id=new_id)
+        return await task_get(id=row['id'])
 
 
-def task_get(id: Optional[int] = None, phase_id: Optional[int] = None, code: Optional[str] = None) -> Optional[dict]:
+async def task_get(id: Optional[int] = None, phase_id: Optional[int] = None, code: Optional[str] = None) -> Optional[dict]:
     """Get task by id or by phase_id + code."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
+    async with get_db() as conn:
         if id is not None:
-            cursor.execute("SELECT * FROM tasks WHERE id = ?", (id,))
+            row = await conn.fetchrow("SELECT * FROM tasks WHERE id = $1", id)
         elif phase_id is not None and code is not None:
-            cursor.execute(
-                "SELECT * FROM tasks WHERE phase_id = ? AND code = ?",
-                (phase_id, code.upper())
+            row = await conn.fetchrow(
+                "SELECT * FROM tasks WHERE phase_id = $1 AND code = $2",
+                phase_id, code.upper()
             )
         else:
             return None
-        row = cursor.fetchone()
         return dict(row) if row else None
 
 
-def task_list(phase_id: Optional[int] = None, project_id: Optional[int] = None) -> list[dict]:
+async def task_list(phase_id: Optional[int] = None, project_id: Optional[int] = None) -> list[dict]:
     """List tasks, optionally filtered by phase or project (via phases)."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
+    async with get_db() as conn:
         if phase_id is not None:
-            cursor.execute(
-                "SELECT * FROM tasks WHERE phase_id = ? ORDER BY code",
-                (phase_id,)
+            rows = await conn.fetch(
+                "SELECT * FROM tasks WHERE phase_id = $1 ORDER BY code",
+                phase_id
             )
         elif project_id is not None:
-            # Get all tasks for all phases of this project
-            cursor.execute(
+            rows = await conn.fetch(
                 """
                 SELECT t.* FROM tasks t
                 JOIN phases p ON t.phase_id = p.id
-                WHERE p.project_id = ?
+                WHERE p.project_id = $1
                 ORDER BY p.code, t.code
                 """,
-                (project_id,)
+                project_id
             )
         else:
-            cursor.execute("SELECT * FROM tasks ORDER BY phase_id, code")
-        return [dict(row) for row in cursor.fetchall()]
+            rows = await conn.fetch("SELECT * FROM tasks ORDER BY phase_id, code")
+        return [dict(row) for row in rows]
 
 
-def task_update(id: int, **kwargs) -> Optional[dict]:
+async def task_update(id: int, **kwargs) -> Optional[dict]:
     """Update task by id. Can move task to different phase via phase_id."""
     allowed_fields = {"code", "description", "phase_id"}
     updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
 
     if not updates:
-        return task_get(id=id)
+        return await task_get(id=id)
 
     if "code" in updates:
         updates["code"] = updates["code"].upper()
 
-    set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
-    values = list(updates.values()) + [id]
+    set_parts = []
+    values = []
+    for i, (k, v) in enumerate(updates.items(), 1):
+        set_parts.append(f"{k} = ${i}")
+        values.append(v)
 
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(f"UPDATE tasks SET {set_clause} WHERE id = ?", values)
-        if cursor.rowcount == 0:
+    values.append(id)
+    set_clause = ", ".join(set_parts)
+
+    async with get_db() as conn:
+        result = await conn.execute(f"UPDATE tasks SET {set_clause} WHERE id = ${len(values)}", *values)
+        if result == "UPDATE 0":
             return None
-        return task_get(id=id)
+        return await task_get(id=id)
 
 
-def task_delete(id: int) -> bool:
+async def task_delete(id: int) -> bool:
     """Delete task by id."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM tasks WHERE id = ?", (id,))
-        return cursor.rowcount > 0
+    async with get_db() as conn:
+        result = await conn.execute("DELETE FROM tasks WHERE id = $1", id)
+        return result != "DELETE 0"
 
 
 # =============================================================================
 # Norms CRUD
 # =============================================================================
 
-def norm_add(year: int, month: int, hours: float) -> dict:
+async def norm_add(year: int, month: int, hours: float) -> dict:
     """Add or update workday norm for a month."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
+    async with get_db() as conn:
+        row = await conn.fetchrow(
             """
             INSERT INTO norms (year, month, hours)
-            VALUES (?, ?, ?)
-            ON CONFLICT(year, month) DO UPDATE SET hours = excluded.hours
+            VALUES ($1, $2, $3)
+            ON CONFLICT(year, month) DO UPDATE SET hours = EXCLUDED.hours
+            RETURNING id
             """,
-            (year, month, hours)
+            year, month, hours
         )
-        cursor.execute("SELECT id FROM norms WHERE year = ? AND month = ?", (year, month))
-        row = cursor.fetchone()
-        return {"id": row["id"], "year": year, "month": month, "hours": hours}
+        return {"id": row['id'], "year": year, "month": month, "hours": hours}
 
 
-def norm_get(id: Optional[int] = None, year: Optional[int] = None, month: Optional[int] = None) -> Optional[dict]:
+async def norm_get(id: Optional[int] = None, year: Optional[int] = None, month: Optional[int] = None) -> Optional[dict]:
     """Get norm by id or by year + month."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
+    async with get_db() as conn:
         if id is not None:
-            cursor.execute("SELECT * FROM norms WHERE id = ?", (id,))
+            row = await conn.fetchrow("SELECT * FROM norms WHERE id = $1", id)
         elif year is not None and month is not None:
-            cursor.execute("SELECT * FROM norms WHERE year = ? AND month = ?", (year, month))
+            row = await conn.fetchrow("SELECT * FROM norms WHERE year = $1 AND month = $2", year, month)
         else:
             return None
-        row = cursor.fetchone()
         return dict(row) if row else None
 
 
-def norm_list(year: Optional[int] = None) -> list[dict]:
+async def norm_list(year: Optional[int] = None) -> list[dict]:
     """List norms, optionally filtered by year."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
+    async with get_db() as conn:
         if year is not None:
-            cursor.execute("SELECT * FROM norms WHERE year = ? ORDER BY month", (year,))
+            rows = await conn.fetch("SELECT * FROM norms WHERE year = $1 ORDER BY month", year)
         else:
-            cursor.execute("SELECT * FROM norms ORDER BY year DESC, month")
-        return [dict(row) for row in cursor.fetchall()]
+            rows = await conn.fetch("SELECT * FROM norms ORDER BY year DESC, month")
+        return [dict(row) for row in rows]
 
 
-def norm_delete(id: int) -> bool:
+async def norm_delete(id: int) -> bool:
     """Delete norm by id."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM norms WHERE id = ?", (id,))
-        return cursor.rowcount > 0
+    async with get_db() as conn:
+        result = await conn.execute("DELETE FROM norms WHERE id = $1", id)
+        return result != "DELETE 0"
 
 
 # =============================================================================
 # Exclusions CRUD
 # =============================================================================
 
-def exclusion_add(pattern: str) -> dict:
+async def exclusion_add(pattern: str) -> dict:
     """Add exclusion pattern."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT OR IGNORE INTO exclusions (pattern) VALUES (?)",
-            (pattern,)
+    async with get_db() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO exclusions (pattern) VALUES ($1)
+            ON CONFLICT (pattern) DO NOTHING
+            RETURNING id
+            """,
+            pattern
         )
-        if cursor.rowcount > 0:
-            return {"id": cursor.lastrowid, "pattern": pattern, "created": True}
-        cursor.execute("SELECT id FROM exclusions WHERE pattern = ?", (pattern,))
-        row = cursor.fetchone()
-        return {"id": row["id"], "pattern": pattern, "created": False}
+        if row:
+            return {"id": row['id'], "pattern": pattern, "created": True}
+        row = await conn.fetchrow("SELECT id FROM exclusions WHERE pattern = $1", pattern)
+        return {"id": row['id'], "pattern": pattern, "created": False}
 
 
-def exclusion_list() -> list[dict]:
+async def exclusion_list() -> list[dict]:
     """List all exclusion patterns."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM exclusions ORDER BY pattern")
-        return [dict(row) for row in cursor.fetchall()]
+    async with get_db() as conn:
+        rows = await conn.fetch("SELECT * FROM exclusions ORDER BY pattern")
+        return [dict(row) for row in rows]
 
 
-def exclusion_delete(id: int) -> bool:
+async def exclusion_delete(id: int) -> bool:
     """Delete exclusion by id."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM exclusions WHERE id = ?", (id,))
-        return cursor.rowcount > 0
+    async with get_db() as conn:
+        result = await conn.execute("DELETE FROM exclusions WHERE id = $1", id)
+        return result != "DELETE 0"
 
 
-def is_excluded(event_summary: str) -> bool:
+async def is_excluded(event_summary: str) -> bool:
     """Check if event summary matches any exclusion pattern (case-insensitive)."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT pattern FROM exclusions")
-        patterns = [row["pattern"].lower() for row in cursor.fetchall()]
+    async with get_db() as conn:
+        rows = await conn.fetch("SELECT pattern FROM exclusions")
+        patterns = [row['pattern'].lower() for row in rows]
         return event_summary.strip().lower() in patterns
 
 
@@ -839,100 +430,86 @@ def is_excluded(event_summary: str) -> bool:
 # Settings CRUD
 # =============================================================================
 
-def config_get(key: str) -> Optional[str]:
+async def config_get(key: str) -> Optional[str]:
     """Get setting value by key."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
-        row = cursor.fetchone()
-        return row["value"] if row else None
+    async with get_db() as conn:
+        row = await conn.fetchrow("SELECT value FROM settings WHERE key = $1", key)
+        return row['value'] if row else None
 
 
-def config_set(key: str, value: str) -> dict:
+async def config_set(key: str, value: str) -> dict:
     """Set setting value."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
+    async with get_db() as conn:
+        await conn.execute(
             """
             INSERT INTO settings (key, value)
-            VALUES (?, ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+            VALUES ($1, $2)
+            ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP
             """,
-            (key, value)
+            key, value
         )
         return {"key": key, "value": value}
 
 
-def config_list() -> dict[str, str]:
+async def config_list() -> dict[str, str]:
     """Get all settings as dictionary."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT key, value FROM settings")
-        return {row["key"]: row["value"] for row in cursor.fetchall()}
+    async with get_db() as conn:
+        rows = await conn.fetch("SELECT key, value FROM settings")
+        return {row['key']: row['value'] for row in rows}
 
 
 # =============================================================================
 # Utility functions for parser (lookup by code)
 # =============================================================================
 
-def get_project_by_code(code: str) -> Optional[dict]:
+async def get_project_by_code(code: str) -> Optional[dict]:
     """Get project by code (for parser). Returns first match."""
-    return project_get(code=code)
+    return await project_get(code=code)
 
 
-def get_projects_by_code(code: str) -> list[dict]:
+async def get_projects_by_code(code: str) -> list[dict]:
     """Get ALL active projects with the same code, ordered by structure_level DESC."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM projects WHERE code = ? AND is_active = 1 ORDER BY structure_level DESC",
-            (code.upper(),)
+    async with get_db() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM projects WHERE code = $1 AND is_active = TRUE ORDER BY structure_level DESC",
+            code.upper()
         )
-        results = []
-        for row in cursor.fetchall():
-            item = dict(row)
-            item["is_billable"] = bool(item["is_billable"])
-            item["is_active"] = bool(item.get("is_active", 1))
-            results.append(item)
-        return results
+        return [dict(row) for row in rows]
 
 
-def get_phase_by_code(project_code: str, phase_code: str) -> Optional[dict]:
+async def get_phase_by_code(project_code: str, phase_code: str) -> Optional[dict]:
     """Get phase by project code and phase code (for parser)."""
-    project = project_get(code=project_code)
+    project = await project_get(code=project_code)
     if not project:
         return None
-    return phase_get(project_id=project["id"], code=phase_code)
+    return await phase_get(project_id=project["id"], code=phase_code)
 
 
-def get_task_by_code(project_code: str, task_code: str) -> Optional[dict]:
+async def get_task_by_code(project_code: str, task_code: str) -> Optional[dict]:
     """Get task by project code and task code (for parser).
 
     v2 note: Tasks are now linked to phases, not projects.
     This function searches all phases of the project for the task.
     """
-    project = project_get(code=project_code)
+    project = await project_get(code=project_code)
     if not project:
         return None
-    # Search all phases of the project for this task
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
+    async with get_db() as conn:
+        row = await conn.fetchrow(
             """
             SELECT t.* FROM tasks t
             JOIN phases p ON t.phase_id = p.id
-            WHERE p.project_id = ? AND t.code = ?
+            WHERE p.project_id = $1 AND t.code = $2
             LIMIT 1
             """,
-            (project["id"], task_code.upper())
+            project["id"], task_code.upper()
         )
-        row = cursor.fetchone()
         return dict(row) if row else None
 
 
-def get_task_by_project_code(project_code: str, task_code: str) -> Optional[dict]:
+async def get_task_by_project_code(project_code: str, task_code: str) -> Optional[dict]:
     """Alias for get_task_by_code for backward compatibility."""
-    return get_task_by_code(project_code, task_code)
+    return await get_task_by_code(project_code, task_code)
 
 
 # Aliases for backward compatibility with parser
@@ -940,14 +517,18 @@ get_project = get_project_by_code
 get_phase = get_phase_by_code
 get_task = get_task_by_code
 get_setting = config_get
-get_norm = lambda year, month: norm_get(year=year, month=month)
+
+
+async def get_norm(year: int, month: int) -> Optional[dict]:
+    """Get norm by year and month."""
+    return await norm_get(year=year, month=month)
 
 
 # =============================================================================
 # Organizations CRUD (v2)
 # =============================================================================
 
-def org_add(
+async def org_add(
     name: str,
     short_name: Optional[str] = None,
     name_local: Optional[str] = None,
@@ -967,78 +548,69 @@ def org_add(
     if relationship_status not in RELATIONSHIP_STATUSES:
         raise ValueError(f"Invalid relationship_status. Must be one of: {RELATIONSHIP_STATUSES}")
 
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
+    async with get_db() as conn:
+        row = await conn.fetchrow(
             """
             INSERT INTO organizations (name, short_name, name_local, organization_type, parent_org_id,
                                       country, city, website, context, relationship_status, first_contact_date, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            RETURNING id
             """,
-            (name, short_name, name_local, organization_type, parent_org_id,
-             country, city, website, context, relationship_status, first_contact_date, notes)
+            name, short_name, name_local, organization_type, parent_org_id,
+            country, city, website, context, relationship_status, first_contact_date, notes
         )
-        new_id = cursor.lastrowid
-    return org_get(id=new_id)
+        return await org_get(id=row['id'])
 
 
-def org_get(id: Optional[int] = None, name: Optional[str] = None) -> Optional[dict]:
+async def org_get(id: Optional[int] = None, name: Optional[str] = None) -> Optional[dict]:
     """Get organization by id or name."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
+    async with get_db() as conn:
         if id is not None:
-            cursor.execute("SELECT * FROM organizations WHERE id = ?", (id,))
+            row = await conn.fetchrow("SELECT * FROM organizations WHERE id = $1", id)
         elif name is not None:
-            cursor.execute("SELECT * FROM organizations WHERE name = ?", (name,))
+            row = await conn.fetchrow("SELECT * FROM organizations WHERE name = $1", name)
         else:
             return None
-        row = cursor.fetchone()
-        if row:
-            result = dict(row)
-            result["is_active"] = bool(result.get("is_active", 1))
-            return result
-        return None
+        return dict(row) if row else None
 
 
-def org_list(
+async def org_list(
     organization_type: Optional[str] = None,
     country: Optional[str] = None,
     relationship_status: Optional[str] = None,
     active_only: bool = True,
 ) -> list[dict]:
     """List organizations with optional filters."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
+    async with get_db() as conn:
         conditions = []
         params = []
+        param_idx = 1
 
         if organization_type:
-            conditions.append("organization_type = ?")
+            conditions.append(f"organization_type = ${param_idx}")
             params.append(organization_type)
+            param_idx += 1
         if country:
-            conditions.append("country = ?")
+            conditions.append(f"country = ${param_idx}")
             params.append(country)
+            param_idx += 1
         if relationship_status:
-            conditions.append("relationship_status = ?")
+            conditions.append(f"relationship_status = ${param_idx}")
             params.append(relationship_status)
+            param_idx += 1
         if active_only:
-            conditions.append("is_active = 1")
+            conditions.append("is_active = TRUE")
 
         query = "SELECT * FROM organizations"
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
         query += " ORDER BY name"
 
-        cursor.execute(query, params)
-        results = []
-        for row in cursor.fetchall():
-            item = dict(row)
-            item["is_active"] = bool(item.get("is_active", 1))
-            results.append(item)
-        return results
+        rows = await conn.fetch(query, *params)
+        return [dict(row) for row in rows]
 
 
-def org_update(id: int, **kwargs) -> Optional[dict]:
+async def org_update(id: int, **kwargs) -> Optional[dict]:
     """Update organization by id."""
     allowed_fields = {"name", "short_name", "name_local", "organization_type", "parent_org_id",
                      "country", "city", "website", "context", "relationship_status",
@@ -1046,66 +618,62 @@ def org_update(id: int, **kwargs) -> Optional[dict]:
     updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
 
     if not updates:
-        return org_get(id=id)
+        return await org_get(id=id)
 
     if "organization_type" in updates and updates["organization_type"] not in ORGANIZATION_TYPES:
         raise ValueError(f"Invalid organization_type. Must be one of: {ORGANIZATION_TYPES}")
     if "relationship_status" in updates and updates["relationship_status"] not in RELATIONSHIP_STATUSES:
         raise ValueError(f"Invalid relationship_status. Must be one of: {RELATIONSHIP_STATUSES}")
-    if "is_active" in updates:
-        updates["is_active"] = int(updates["is_active"])
 
-    set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
-    values = list(updates.values()) + [id]
+    set_parts = []
+    values = []
+    for i, (k, v) in enumerate(updates.items(), 1):
+        set_parts.append(f"{k} = ${i}")
+        values.append(v)
 
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            f"UPDATE organizations SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            values
+    values.append(id)
+    set_clause = ", ".join(set_parts)
+
+    async with get_db() as conn:
+        result = await conn.execute(
+            f"UPDATE organizations SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ${len(values)}",
+            *values
         )
-        if cursor.rowcount == 0:
+        if result == "UPDATE 0":
             return None
-    return org_get(id=id)
+    return await org_get(id=id)
 
 
-def org_delete(id: int) -> bool:
+async def org_delete(id: int) -> bool:
     """Delete organization by id."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM organizations WHERE id = ?", (id,))
-        return cursor.rowcount > 0
+    async with get_db() as conn:
+        result = await conn.execute("DELETE FROM organizations WHERE id = $1", id)
+        return result != "DELETE 0"
 
 
-def org_search(query: str, limit: int = 20) -> list[dict]:
+async def org_search(query: str, limit: int = 20) -> list[dict]:
     """Search organizations by name or short_name."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
+    async with get_db() as conn:
         search_pattern = f"%{query}%"
-        cursor.execute(
+        rows = await conn.fetch(
             """
             SELECT * FROM organizations
-            WHERE name LIKE ? COLLATE NOCASE
-               OR short_name LIKE ? COLLATE NOCASE
-               OR name_local LIKE ? COLLATE NOCASE
+            WHERE name ILIKE $1
+               OR short_name ILIKE $1
+               OR name_local ILIKE $1
             ORDER BY name
-            LIMIT ?
+            LIMIT $2
             """,
-            (search_pattern, search_pattern, search_pattern, limit)
+            search_pattern, limit
         )
-        results = []
-        for row in cursor.fetchall():
-            item = dict(row)
-            item["is_active"] = bool(item.get("is_active", 1))
-            results.append(item)
-        return results
+        return [dict(row) for row in rows]
 
 
 # =============================================================================
 # Project-Organization Links CRUD (v2)
 # =============================================================================
 
-def project_org_add(
+async def project_org_add(
     project_id: int,
     organization_id: int,
     org_role: str,
@@ -1120,62 +688,58 @@ def project_org_add(
     if org_role not in ORG_ROLES:
         raise ValueError(f"Invalid org_role. Must be one of: {ORG_ROLES}")
 
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
+    async with get_db() as conn:
+        row = await conn.fetchrow(
             """
             INSERT INTO project_organizations (project_id, organization_id, org_role,
                                               contract_value, currency, is_lead, start_date, end_date, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            RETURNING id
             """,
-            (project_id, organization_id, org_role, contract_value, currency, int(is_lead), start_date, end_date, notes)
+            project_id, organization_id, org_role, contract_value, currency, is_lead, start_date, end_date, notes
         )
-        new_id = cursor.lastrowid
-    return project_org_get(id=new_id)
+        return await project_org_get(id=row['id'])
 
 
-def project_org_get(id: int) -> Optional[dict]:
+async def project_org_get(id: int) -> Optional[dict]:
     """Get project-organization link by id."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
+    async with get_db() as conn:
+        row = await conn.fetchrow(
             """
             SELECT po.*, p.code as project_code, o.name as organization_name
             FROM project_organizations po
             JOIN projects p ON po.project_id = p.id
             JOIN organizations o ON po.organization_id = o.id
-            WHERE po.id = ?
+            WHERE po.id = $1
             """,
-            (id,)
+            id
         )
-        row = cursor.fetchone()
-        if row:
-            result = dict(row)
-            result["is_lead"] = bool(result.get("is_lead", 0))
-            return result
-        return None
+        return dict(row) if row else None
 
 
-def project_org_list(
+async def project_org_list(
     project_id: Optional[int] = None,
     organization_id: Optional[int] = None,
     org_role: Optional[str] = None,
 ) -> list[dict]:
     """List project-organization links with optional filters."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
+    async with get_db() as conn:
         conditions = []
         params = []
+        param_idx = 1
 
         if project_id:
-            conditions.append("po.project_id = ?")
+            conditions.append(f"po.project_id = ${param_idx}")
             params.append(project_id)
+            param_idx += 1
         if organization_id:
-            conditions.append("po.organization_id = ?")
+            conditions.append(f"po.organization_id = ${param_idx}")
             params.append(organization_id)
+            param_idx += 1
         if org_role:
-            conditions.append("po.org_role = ?")
+            conditions.append(f"po.org_role = ${param_idx}")
             params.append(org_role)
+            param_idx += 1
 
         query = """
             SELECT po.*, p.code as project_code, o.name as organization_name
@@ -1187,93 +751,91 @@ def project_org_list(
             query += " WHERE " + " AND ".join(conditions)
         query += " ORDER BY po.project_id, po.is_lead DESC, o.name"
 
-        cursor.execute(query, params)
-        results = []
-        for row in cursor.fetchall():
-            item = dict(row)
-            item["is_lead"] = bool(item.get("is_lead", 0))
-            results.append(item)
-        return results
+        rows = await conn.fetch(query, *params)
+        return [dict(row) for row in rows]
 
 
-def project_org_update(id: int, **kwargs) -> Optional[dict]:
+async def project_org_update(id: int, **kwargs) -> Optional[dict]:
     """Update project-organization link by id."""
     allowed_fields = {"org_role", "contract_value", "currency", "is_lead", "start_date", "end_date", "notes"}
     updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
 
     if not updates:
-        return project_org_get(id=id)
+        return await project_org_get(id=id)
 
     if "org_role" in updates and updates["org_role"] not in ORG_ROLES:
         raise ValueError(f"Invalid org_role. Must be one of: {ORG_ROLES}")
-    if "is_lead" in updates:
-        updates["is_lead"] = int(updates["is_lead"])
 
-    set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
-    values = list(updates.values()) + [id]
+    set_parts = []
+    values = []
+    for i, (k, v) in enumerate(updates.items(), 1):
+        set_parts.append(f"{k} = ${i}")
+        values.append(v)
 
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(f"UPDATE project_organizations SET {set_clause} WHERE id = ?", values)
-        if cursor.rowcount == 0:
+    values.append(id)
+    set_clause = ", ".join(set_parts)
+
+    async with get_db() as conn:
+        result = await conn.execute(f"UPDATE project_organizations SET {set_clause} WHERE id = ${len(values)}", *values)
+        if result == "UPDATE 0":
             return None
-    return project_org_get(id=id)
+    return await project_org_get(id=id)
 
 
-def project_org_delete(id: int) -> bool:
+async def project_org_delete(id: int) -> bool:
     """Delete project-organization link by id."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM project_organizations WHERE id = ?", (id,))
-        return cursor.rowcount > 0
+    async with get_db() as conn:
+        result = await conn.execute("DELETE FROM project_organizations WHERE id = $1", id)
+        return result != "DELETE 0"
 
 
-def get_project_organizations(project_id: int) -> list[dict]:
+async def get_project_organizations(project_id: int) -> list[dict]:
     """Get all organizations linked to a project."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
+    async with get_db() as conn:
+        rows = await conn.fetch(
             """
             SELECT o.*, po.org_role, po.is_lead, po.contract_value as link_contract_value,
                    po.currency as link_currency, po.start_date as link_start_date,
                    po.end_date as link_end_date, po.notes as link_notes
             FROM organizations o
             JOIN project_organizations po ON o.id = po.organization_id
-            WHERE po.project_id = ?
+            WHERE po.project_id = $1
             ORDER BY po.is_lead DESC, o.name
             """,
-            (project_id,)
+            project_id
         )
-        results = []
-        for row in cursor.fetchall():
-            item = dict(row)
-            item["is_active"] = bool(item.get("is_active", 1))
-            item["is_lead"] = bool(item.get("is_lead", 0))
-            results.append(item)
-        return results
+        return [dict(row) for row in rows]
 
 
-def get_organization_projects(organization_id: int) -> list[dict]:
+async def get_organization_projects(organization_id: int) -> list[dict]:
     """Get all projects linked to an organization."""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
+    async with get_db() as conn:
+        rows = await conn.fetch(
             """
             SELECT p.*, po.org_role, po.is_lead, po.contract_value as link_contract_value,
                    po.currency as link_currency, po.start_date as link_start_date,
                    po.end_date as link_end_date, po.notes as link_notes
             FROM projects p
             JOIN project_organizations po ON p.id = po.project_id
-            WHERE po.organization_id = ?
+            WHERE po.organization_id = $1
             ORDER BY p.is_active DESC, p.code
             """,
-            (organization_id,)
+            organization_id
         )
-        results = []
-        for row in cursor.fetchall():
-            item = dict(row)
-            item["is_billable"] = bool(item.get("is_billable", 0))
-            item["is_active"] = bool(item.get("is_active", 1))
-            item["is_lead"] = bool(item.get("is_lead", 0))
-            results.append(item)
-        return results
+        return [dict(row) for row in rows]
+
+
+# =============================================================================
+# Sync wrappers for backward compatibility (used by manage.py OPERATIONS dict)
+# =============================================================================
+# Note: These are needed because manage.py uses lambda functions that expect sync results.
+# The actual execution happens in the async tool function.
+
+def init_database():
+    """Placeholder - schema is managed via schema.sql applied by workflow."""
+    pass
+
+
+def get_database_path():
+    """Placeholder for compatibility - not used with PostgreSQL."""
+    return None
