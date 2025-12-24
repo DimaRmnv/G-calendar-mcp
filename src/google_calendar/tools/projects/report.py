@@ -182,7 +182,7 @@ def _get_error_records(entries: list[TimeEntry]) -> list[dict]:
     return records
 
 
-def _generate_excel(entries: list[TimeEntry], period_type: str) -> tuple[Path, str]:
+async def _generate_excel(entries: list[TimeEntry], period_type: str) -> tuple[Path, str]:
     """Generate Excel timesheet report. Returns (file_path, file_name)."""
     try:
         from openpyxl import Workbook
@@ -190,7 +190,7 @@ def _generate_excel(entries: list[TimeEntry], period_type: str) -> tuple[Path, s
     except ImportError:
         raise ImportError("openpyxl required. Install: pip install openpyxl")
 
-    base_location = config_get("base_location") or ""
+    base_location = await config_get("base_location") or ""
     wb = Workbook()
     ws = wb.active
     ws.title = f"{period_type}-to-date"
@@ -260,15 +260,15 @@ async def generate_report(
         For status: week/month summaries with on-track percentages
         For reports: summary + error_records + Excel file path (auto-saved)
     """
-    ensure_database()
+    await ensure_database()
 
     now = datetime.now()
     today = now.date()
 
     # Settings
-    calendar_id = config_get("work_calendar") or "primary"
-    billable_target_type = config_get("billable_target_type") or "days"
-    billable_target_value = float(config_get("billable_target_value") or "15")
+    calendar_id = await config_get("work_calendar") or "primary"
+    billable_target_type = await config_get("billable_target_type") or "days"
+    billable_target_value = float(await config_get("billable_target_value") or "15")
     
     # Convert to days if needed
     if billable_target_type == "days":
@@ -293,7 +293,7 @@ async def generate_report(
         week_workdays = _count_workdays(week_start.date(), today)
         month_workdays = _count_workdays(month_start.date(), today)
 
-        norm_data = norm_get(year=now.year, month=now.month)
+        norm_data = await norm_get(year=now.year, month=now.month)
         month_norm = norm_data["hours"] if norm_data else month_workdays * 8
         billable_target_hours = billable_target_days * 8
 
@@ -366,12 +366,12 @@ async def generate_report(
         start = now - timedelta(days=now.weekday())
         start = start.replace(hour=0, minute=0, second=0, microsecond=0)
         end = now.replace(hour=23, minute=59, second=59)
-        norm_data = norm_get(year=now.year, month=now.month)
+        norm_data = await norm_get(year=now.year, month=now.month)
         norm_hours = norm_data["hours"] if norm_data else 176
     elif report_type == "month":
         start = datetime(now.year, now.month, 1)
         end = now.replace(hour=23, minute=59, second=59)
-        norm_data = norm_get(year=now.year, month=now.month)
+        norm_data = await norm_get(year=now.year, month=now.month)
         norm_hours = norm_data["hours"] if norm_data else _count_workdays(start.date(), today) * 8
     elif report_type == "custom":
         if not start_date or not end_date:
@@ -379,7 +379,7 @@ async def generate_report(
         start = datetime.fromisoformat(start_date)
         end = datetime.fromisoformat(end_date).replace(hour=23, minute=59, second=59)
         # For custom, use the month norm of start date
-        norm_data = norm_get(year=start.year, month=start.month)
+        norm_data = await norm_get(year=start.year, month=start.month)
         norm_hours = norm_data["hours"] if norm_data else _count_workdays(start.date(), end.date()) * 8
     else:
         return {"error": f"Unknown report_type: {report_type}. Use: status, week, month, custom"}
@@ -408,7 +408,7 @@ async def generate_report(
     
     # Always generate Excel
     try:
-        file_path, file_name = _generate_excel(entries, report_type)
+        file_path, file_name = await _generate_excel(entries, report_type)
     except Exception as e:
         return {
             "summary": summary,
