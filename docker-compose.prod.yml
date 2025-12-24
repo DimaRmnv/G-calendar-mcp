@@ -36,7 +36,7 @@ services:
       - ./data:/data
       - ./data/.mcp:/root/.mcp
     ports:
-      - "127.0.0.1:8005:8000"
+      - "0.0.0.0:8005:8000"
     networks:
       - mcp-network
     healthcheck:
