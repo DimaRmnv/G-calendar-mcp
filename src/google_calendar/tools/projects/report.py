@@ -215,7 +215,7 @@ async def _generate_excel(entries: list[TimeEntry], period_type: str) -> tuple[s
         ws.cell(row=row, column=5, value=base_location)
         ws.cell(row=row, column=6, value=desc)
         ws.cell(row=row, column=7, value="")  # Per diems
-        ws.cell(row=row, column=8, value=entry.position or "")
+        ws.cell(row=row, column=8, value="")  # Title (formerly position)
         ws.cell(row=row, column=9, value="")  # Comment
         ws.cell(row=row, column=10, value="; ".join(entry.errors) if entry.errors else "")
         row += 1
@@ -298,7 +298,7 @@ async def generate_report(
         except Exception as e:
             return {"error": f"Failed to fetch events: {str(e)}"}
 
-        entries = parse_events_batch(events)
+        entries = await parse_events_batch(events)
         active = [e for e in entries if not e.is_excluded]
 
         week_start_date = week_start.date()
@@ -387,8 +387,8 @@ async def generate_report(
     except Exception as e:
         return {"error": f"Failed to fetch events: {str(e)}"}
 
-    entries = parse_events_batch(events)
-    
+    entries = await parse_events_batch(events)
+
     # Build response
     summary = _calculate_summary(
         entries=entries,
