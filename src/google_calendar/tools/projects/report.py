@@ -8,12 +8,12 @@ from typing import Optional
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from google_calendar.tools.time_tracking.database import (
+from google_calendar.tools.projects.database import (
     ensure_database,
     config_get,
     norm_get,
 )
-from google_calendar.tools.time_tracking.parser import parse_events_batch, TimeEntry
+from google_calendar.tools.projects.parser import parse_events_batch, TimeEntry
 from google_calendar.api.client import get_service
 
 
@@ -241,14 +241,14 @@ def _generate_excel(entries: list[TimeEntry], period_type: str) -> tuple[Path, s
     return file_path, file_name
 
 
-async def time_tracking_report(
+async def generate_report(
     report_type: str = "status",
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     account: Optional[str] = None,
 ) -> dict:
     """
-    Time tracking report and status tool.
+    Generate project report.
 
     Args:
         report_type: 'status' (quick WTD/MTD), 'week', 'month', or 'custom'

@@ -1,12 +1,12 @@
 """
-Batch management tool for time tracking.
+Projects management tool.
 
-Single tool for all CRUD operations: projects, phases, tasks, norms, exclusions, config.
+Single tool for all operations: projects, phases, tasks, norms, exclusions, config, reports.
 Supports batch operations for efficient setup.
 """
 
 from typing import Optional
-from google_calendar.tools.time_tracking.database import (
+from google_calendar.tools.projects.database import (
     ensure_database,
     init_database,
     database_exists,
@@ -24,6 +24,7 @@ from google_calendar.tools.time_tracking.database import (
     # Config
     config_get, config_set, config_list,
 )
+from google_calendar.tools.projects.report import generate_report
 
 
 # Operation handlers
@@ -90,6 +91,28 @@ OPERATIONS = {
     "init": lambda p: _init_database(force_reset=p.get("force_reset", False)),
 }
 
+# Async operations (reports require awaiting)
+ASYNC_OPERATIONS = {
+    "report_status": lambda p: generate_report(
+        report_type="status",
+        account=p.get("account")
+    ),
+    "report_week": lambda p: generate_report(
+        report_type="week",
+        account=p.get("account")
+    ),
+    "report_month": lambda p: generate_report(
+        report_type="month",
+        account=p.get("account")
+    ),
+    "report_custom": lambda p: generate_report(
+        report_type="custom",
+        start_date=p.get("start_date"),
+        end_date=p.get("end_date"),
+        account=p.get("account")
+    ),
+}
+
 
 def _init_database(force_reset: bool = False) -> dict:
     """Initialize empty database."""
@@ -116,15 +139,15 @@ def _init_database(force_reset: bool = False) -> dict:
     }
 
 
-async def time_tracking(operations: list[dict]) -> dict:
+async def projects(operations: list[dict]) -> dict:
     """
-    Batch management tool for time tracking configuration.
+    Projects management tool.
 
     Execute multiple operations in a single call for efficient setup.
     All entities have integer 'id' for update/delete operations.
 
-    IMPORTANT: Use project_list_active when creating time tracking events
-    and you need to know available projects and their structure (phases/tasks).
+    IMPORTANT: Use project_list_active when creating calendar events
+    to know available projects and their structure (phases/tasks).
 
     Args:
         operations: List of operations to execute. Each operation is a dict with:
@@ -137,11 +160,9 @@ async def time_tracking(operations: list[dict]) -> dict:
             - project_get: id or code
             - project_list: billable_only?, active_only?
             - project_list_active: Get active projects with phases and tasks.
-              Use this when creating time tracking events to know available projects.
             - project_update: id, code?, description?, is_billable?, is_active?, position?, structure_level?
             - project_delete: id
-            - project_activate: id (shortcut for setting is_active=True)
-            - project_deactivate: id (shortcut for setting is_active=False)
+            - project_activate/project_deactivate: id
 
         Phases (require project_id):
             - phase_add: project_id, code, description?
@@ -173,6 +194,12 @@ async def time_tracking(operations: list[dict]) -> dict:
             - config_set: key, value
             - config_list
 
+        Reports:
+            - report_status: account? - Quick WTD/MTD summary
+            - report_week: account? - Week report with Excel export
+            - report_month: account? - Month report with Excel export
+            - report_custom: account?, start_date, end_date - Custom period report
+
         Init:
             - init: force_reset?
 
@@ -180,12 +207,10 @@ async def time_tracking(operations: list[dict]) -> dict:
         Dict with results array and summary.
 
     Example:
-        time_tracking(operations=[
-            {"op": "project_add", "code": "NEW", "description": "New Project", "is_billable": True, "structure_level": 3},
+        projects(operations=[
+            {"op": "project_add", "code": "NEW", "description": "New Project", "is_billable": True},
             {"op": "phase_add", "project_id": 1, "code": "P1", "description": "Phase 1"},
-            {"op": "task_add", "project_id": 1, "code": "T1", "description": "Task 1"},
-            {"op": "norm_add", "year": 2025, "month": 1, "hours": 176},
-            {"op": "config_set", "key": "work_calendar", "value": "work@example.com"},
+            {"op": "report_status"},
         ])
     """
     ensure_database()
@@ -202,18 +227,31 @@ async def time_tracking(operations: list[dict]) -> dict:
             error_count += 1
             continue
 
-        if op not in OPERATIONS:
-            results.append({"index": i, "op": op, "error": f"Unknown operation: {op}"})
-            error_count += 1
+        # Check sync operations first
+        if op in OPERATIONS:
+            try:
+                result = OPERATIONS[op](op_data)
+                results.append({"index": i, "op": op, "result": result})
+                success_count += 1
+            except Exception as e:
+                results.append({"index": i, "op": op, "error": str(e)})
+                error_count += 1
             continue
 
-        try:
-            result = OPERATIONS[op](op_data)
-            results.append({"index": i, "op": op, "result": result})
-            success_count += 1
-        except Exception as e:
-            results.append({"index": i, "op": op, "error": str(e)})
-            error_count += 1
+        # Check async operations (reports)
+        if op in ASYNC_OPERATIONS:
+            try:
+                result = await ASYNC_OPERATIONS[op](op_data)
+                results.append({"index": i, "op": op, "result": result})
+                success_count += 1
+            except Exception as e:
+                results.append({"index": i, "op": op, "error": str(e)})
+                error_count += 1
+            continue
+
+        # Unknown operation
+        results.append({"index": i, "op": op, "error": f"Unknown operation: {op}"})
+        error_count += 1
 
     return {
         "results": results,

@@ -19,28 +19,8 @@ from google_calendar.tools.crud import (
 from google_calendar.tools.reference import manage_calendars, list_colors, manage_settings
 from google_calendar.tools.attendees import manage_attendees, respond_to_event
 from google_calendar.tools.intelligence import batch_operations, find_meeting_slots, weekly_brief
-from google_calendar.utils.config import load_config
-
-
-def _is_time_tracking_enabled() -> bool:
-    """Check if time tracking is enabled in config."""
-    config = load_config()
-    return config.get("time_tracking", {}).get("enabled", False)
-
-
-def _is_contacts_enabled() -> bool:
-    """Check if contacts is enabled in config."""
-    config = load_config()
-    return config.get("contacts", {}).get("enabled", False)
-
-
-def _is_cloud_mode() -> bool:
-    """Check if running in cloud mode."""
-    try:
-        from google_calendar.settings import settings
-        return settings.transport_mode == "http"
-    except ImportError:
-        return False
+from google_calendar.tools.projects import projects
+from google_calendar.tools.contacts import contacts
 
 
 # Create server
@@ -71,9 +51,10 @@ Attendees: manage_attendees | Bulk: batch_operations
 Reference: manage_calendars, list_colors, manage_settings
 Move event: update_event(destination_calendar_id=...) - call manage_calendars(action="list") first
 
-TIME TRACKING (if enabled):
-time_tracking(operations=[...]) - Use project_list_active when creating events and unsure about available projects.
-time_tracking_report(report_type, output_format)
+PROJECTS:
+projects(operations=[...]) - Manage projects, phases, tasks, norms, exclusions, config.
+  Use project_list_active when creating events to see available projects.
+  Reports: report_status, report_week, report_month, report_custom
 
 TIME: '2024-12-15T10:00:00' (timed) or '2024-12-15' (all-day)."""
 )
@@ -101,15 +82,8 @@ mcp.tool(batch_operations)
 mcp.tool(find_meeting_slots)
 mcp.tool(weekly_brief)
 
-# Time tracking tools - always enabled
-from google_calendar.tools.time_tracking import time_tracking, time_tracking_report
-
-mcp.tool(time_tracking)
-mcp.tool(time_tracking_report)
-
-# Contacts tools - always enabled
-from google_calendar.tools.contacts import contacts
-
+# Projects and Contacts tools - always enabled
+mcp.tool(projects)
 mcp.tool(contacts)
 
 

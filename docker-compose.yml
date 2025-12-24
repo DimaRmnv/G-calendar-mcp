@@ -5,8 +5,8 @@ services:
     container_name: google-calendar-mcp
     restart: unless-stopped
     environment:
-      # Database (shared PostgreSQL with travel-mcp)
-      - POSTGRES_HOST=travel-postgres
+      # Database (shared PostgreSQL for all MCP services)
+      - POSTGRES_HOST=shared-postgres
       - POSTGRES_PORT=5432
       - POSTGRES_USER=${POSTGRES_USER:-travel}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
