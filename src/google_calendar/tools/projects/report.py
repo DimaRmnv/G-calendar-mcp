@@ -172,69 +172,31 @@ def _get_error_records(entries: list[TimeEntry]) -> list[dict]:
     return records
 
 
-async def _generate_excel(entries: list[TimeEntry], period_type: str) -> tuple[str, str, str]:
-    """Generate Excel timesheet report. Returns (base64_content, file_name, mime_type)."""
-    import base64
-    from io import BytesIO
+def _entries_to_json(entries: list[TimeEntry]) -> dict:
+    """Convert entries to JSON with column names."""
+    columns = ["date", "hours", "project", "phase", "task", "description", "billable", "errors"]
 
-    try:
-        from openpyxl import Workbook
-        from openpyxl.styles import Font, PatternFill
-    except ImportError:
-        raise ImportError("openpyxl required. Install: pip install openpyxl")
-
-    base_location = await config_get("base_location") or ""
-    wb = Workbook()
-    ws = wb.active
-    ws.title = f"{period_type}-to-date"
-
-    # Headers (10 columns for 1C import)
-    headers = ["Date", "Fact hours", "Project", "Project phase", "Location", 
-               "Description", "Per diems", "Title", "Comment", "Errors"]
-    for col, header in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=col, value=header)
-        cell.font = Font(bold=True)
-        cell.fill = PatternFill(start_color="CCCCCC", end_color="CCCCCC", fill_type="solid")
-
-    # Data rows
-    row = 2
+    rows = []
     for entry in entries:
         if entry.is_excluded:
             continue
-        
-        # Build description: TASK * Description or just description
-        if entry.task_code and entry.description:
-            desc = f"{entry.task_code} * {entry.description}"
-        else:
-            desc = entry.description or entry.raw_summary[:100]
-        
-        ws.cell(row=row, column=1, value=entry.date.strftime("%d.%m.%Y"))
-        ws.cell(row=row, column=2, value=entry.duration_hours)
-        ws.cell(row=row, column=3, value=entry.project_code or "")
-        ws.cell(row=row, column=4, value=entry.phase_code or "")
-        ws.cell(row=row, column=5, value=base_location)
-        ws.cell(row=row, column=6, value=desc)
-        ws.cell(row=row, column=7, value="")  # Per diems
-        ws.cell(row=row, column=8, value="")  # Title (formerly position)
-        ws.cell(row=row, column=9, value="")  # Comment
-        ws.cell(row=row, column=10, value="; ".join(entry.errors) if entry.errors else "")
-        row += 1
 
-    # Column widths
-    widths = [12, 10, 12, 15, 12, 80, 10, 30, 15, 30]
-    for i, w in enumerate(widths, 1):
-        ws.column_dimensions[chr(64 + i)].width = w
+        rows.append({
+            "date": entry.date.strftime("%Y-%m-%d"),
+            "hours": entry.duration_hours,
+            "project": entry.project_code or "",
+            "phase": entry.phase_code or "",
+            "task": entry.task_code or "",
+            "description": entry.description or entry.raw_summary[:100],
+            "billable": entry.is_billable,
+            "errors": "; ".join(entry.errors) if entry.errors else None,
+        })
 
-    # Save to BytesIO and encode as base64
-    buffer = BytesIO()
-    wb.save(buffer)
-    buffer.seek(0)
-
-    file_name = f"{datetime.now().strftime('%Y-%m-%d')}_{period_type}_timesheet.xlsx"
-    base64_content = base64.b64encode(buffer.read()).decode('utf-8')
-    mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-
-    return base64_content, file_name, mime_type
+    return {
+        "columns": columns,
+        "rows": rows,
+        "count": len(rows),
+    }
 
 
 async def generate_report(
@@ -401,25 +363,12 @@ async def generate_report(
     )
     
     error_records = _get_error_records(entries)
-    
-    # Always generate Excel as base64
-    try:
-        base64_content, file_name, mime_type = await _generate_excel(entries, report_type)
-        excel_data = {
-            "file_name": file_name,
-            "mime_type": mime_type,
-            "base64": base64_content,
-        }
-    except Exception as e:
-        return {
-            "summary": summary,
-            "error_records": error_records,
-            "excel_error": str(e),
-        }
+
+    # Convert entries to JSON
+    entries_data = _entries_to_json(entries)
 
     return {
         "summary": summary,
         "error_records": error_records,
-        "excel": excel_data,
-        "_artifact_hint": "Create downloadable Excel file from excel.base64 with excel.file_name"
+        "entries": entries_data,
     }
