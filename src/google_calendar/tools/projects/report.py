@@ -450,9 +450,19 @@ async def generate_report(
 
     error_records = _get_error_records(entries)
 
-    # Generate Excel file
+    # Generate Excel file with descriptive filename
     file_uuid = uuid.uuid4().hex
-    filename = f"report_{start.strftime('%Y%m%d')}_{end.strftime('%Y%m%d')}.xlsx"
+
+    # Format: Timesheet_Week_22-24Dec2025.xlsx or Timesheet_December2025.xlsx
+    if report_type == "week":
+        if start.month == end.month:
+            filename = f"Timesheet_Week_{start.day}-{end.day}{end.strftime('%b%Y')}.xlsx"
+        else:
+            filename = f"Timesheet_Week_{start.strftime('%d%b')}-{end.strftime('%d%b%Y')}.xlsx"
+    elif report_type == "month":
+        filename = f"Timesheet_{start.strftime('%B%Y')}.xlsx"
+    else:  # custom
+        filename = f"Timesheet_{start.strftime('%d%b')}-{end.strftime('%d%b%Y')}.xlsx"
     file_path = Path("/data/reports") / f"{file_uuid}.xlsx"
 
     # Create Excel file
