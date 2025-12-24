@@ -172,11 +172,14 @@ def _get_error_records(entries: list[TimeEntry]) -> list[dict]:
     return records
 
 
-def _entries_to_json(entries: list[TimeEntry]) -> dict:
+async def _entries_to_json(entries: list[TimeEntry], base_location: str = "") -> dict:
     """Convert entries to JSON with column names.
 
     Column order matches Excel export format:
     Date, Fact hours, Project, Project phase, Location, Description, Per diems, Title, Comment, Errors
+
+    Location is base_location from config.
+    Description includes task code as prefix if present: "TASK * description"
     """
     columns = ["date", "hours", "project", "phase", "location", "description", "per_diems", "title", "comment", "errors"]
 
@@ -185,16 +188,24 @@ def _entries_to_json(entries: list[TimeEntry]) -> dict:
         if entry.is_excluded:
             continue
 
+        # Build description with task prefix if present
+        if entry.task_code and entry.description:
+            full_description = f"{entry.task_code} * {entry.description}"
+        elif entry.task_code:
+            full_description = entry.task_code
+        else:
+            full_description = entry.description or ""
+
         rows.append({
             "date": entry.date.strftime("%Y-%m-%d"),
             "hours": entry.duration_hours,
             "project": entry.project_code or "",
             "phase": entry.phase_code or "",
-            "location": entry.task_code or "",
-            "description": entry.description or "",
+            "location": base_location,
+            "description": full_description,
             "per_diems": None,
             "title": entry.my_role or "",
-            "comment": entry.raw_summary if entry.raw_summary != entry.description else "",
+            "comment": entry.raw_summary if entry.raw_summary != full_description else "",
             "errors": "; ".join(entry.errors) if entry.errors else None,
         })
 
@@ -233,6 +244,7 @@ async def generate_report(
     calendar_id = await config_get("work_calendar") or "primary"
     billable_target_type = await config_get("billable_target_type") or "days"
     billable_target_value = float(await config_get("billable_target_value") or "15")
+    base_location = await config_get("base_location") or ""
     
     # Convert to days if needed
     if billable_target_type == "days":
@@ -371,7 +383,7 @@ async def generate_report(
     error_records = _get_error_records(entries)
 
     # Convert entries to JSON
-    entries_data = _entries_to_json(entries)
+    entries_data = await _entries_to_json(entries, base_location)
 
     return {
         "summary": summary,
