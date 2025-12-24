@@ -44,7 +44,6 @@ async def _execute_operation(op: str, p: dict) -> dict:
             description=p["description"],
             is_billable=p.get("is_billable", False),
             is_active=p.get("is_active", True),
-            position=p.get("position"),
             structure_level=p.get("structure_level", 1),
             full_name=p.get("full_name"),
             country=p.get("country"),

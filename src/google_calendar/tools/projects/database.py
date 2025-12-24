@@ -52,7 +52,6 @@ async def project_add(
     description: str,
     is_billable: bool = False,
     is_active: bool = True,
-    position: Optional[str] = None,
     structure_level: int = 1,
     full_name: Optional[str] = None,
     country: Optional[str] = None,
@@ -67,12 +66,12 @@ async def project_add(
     async with get_db() as conn:
         row = await conn.fetchrow(
             """
-            INSERT INTO projects (code, description, is_billable, is_active, position, structure_level,
+            INSERT INTO projects (code, description, is_billable, is_active, structure_level,
                                  full_name, country, sector, start_date, end_date, contract_value, currency, context)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
             RETURNING id
             """,
-            code.upper(), description, is_billable, is_active, position, structure_level,
+            code.upper(), description, is_billable, is_active, structure_level,
             full_name, country, sector, start_date, end_date, contract_value, currency, context
         )
         return await project_get(id=row['id'])
@@ -117,7 +116,7 @@ async def project_list(billable_only: bool = False, active_only: bool = False) -
 
 async def project_update(id: int, **kwargs) -> Optional[dict]:
     """Update project by id. Supports v2 fields."""
-    allowed_fields = {"code", "description", "is_billable", "is_active", "position", "structure_level",
+    allowed_fields = {"code", "description", "is_billable", "is_active", "structure_level",
                      "full_name", "country", "sector", "start_date", "end_date", "contract_value", "currency", "context"}
     updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
 

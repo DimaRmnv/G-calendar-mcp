@@ -56,7 +56,6 @@ CREATE TABLE IF NOT EXISTS projects (
     sector TEXT,
     is_billable BOOLEAN NOT NULL DEFAULT FALSE,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    position TEXT,
     structure_level INTEGER NOT NULL DEFAULT 1,
     start_date DATE,
     end_date DATE,
