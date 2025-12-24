@@ -303,15 +303,34 @@ contacts(operations=[{"op": "contact_resolve", "identifier": "jsmith@adb.org"}])
 
 ### Role Codes
 
-Standard roles organized by category:
+Roles are stored in `project_roles` table with full CRUD support:
 
-**Consultant**: TL (Team Leader), DTL (Deputy TL), SE (Senior Expert), JE (Junior Expert), NKE (National Expert), PM (Project Manager)
+```python
+# List all roles
+projects(operations=[{"op": "role_list"}])
 
-**Client**: CPM (Client PM), CFP (Client Focal Point), CC (Client Counterpart)
+# List by category
+projects(operations=[{"op": "role_list", "role_category": "consultant"}])
 
-**Donor**: DO (Donor Officer), DPM (Donor PM), DF (Donor Focal)
+# Add custom role
+projects(operations=[{"op": "role_add", "role_code": "SA", "role_name_en": "Senior Advisor",
+                      "role_category": "consultant", "description": "Advisory support"}])
 
-**Partner**: PP (Partner PM), PC (Partner Contact), LB (Local Bank)
+# Update role
+projects(operations=[{"op": "role_update", "role_code": "SA", "role_name_ru": "Старший советник"}])
+
+# Delete role
+projects(operations=[{"op": "role_delete", "role_code": "SA"}])
+```
+
+**Standard roles by category**:
+
+| Category | Roles |
+|----------|-------|
+| Consultant | TL (Team Leader), DTL (Deputy TL), KE (Key Expert), NKE (Non-Key Expert), PM (Project Manager), BSM (Backstopping Manager), JE (Junior Expert), LA (Local Assistant), INT (Interpreter) |
+| Client | CD (Client Director), CPM (Client PM), PIU (PIU Coordinator), CP (Counterpart), BEN (Beneficiary) |
+| Donor | DO (Donor Officer), DPM (Donor PM), TA (Technical Advisor) |
+| Partner | PC (Partner Consultant), SUB (Subcontractor) |
 
 ### Reports and Export
 
