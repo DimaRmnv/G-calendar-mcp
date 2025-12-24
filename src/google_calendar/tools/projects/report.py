@@ -4,8 +4,10 @@ Report tool for time tracking.
 Combines status (quick summary) and full reports with Excel export.
 """
 
+import uuid
 from typing import Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from google_calendar.tools.projects.database import (
     ensure_database,
@@ -14,6 +16,11 @@ from google_calendar.tools.projects.database import (
 )
 from google_calendar.tools.projects.parser import parse_events_batch, TimeEntry
 from google_calendar.api.client import get_service
+from google_calendar.db.connection import get_db
+
+
+# Base URL for download links (hardcoded)
+EXPORT_BASE_URL = "https://157.173.109.132:8005"
 
 
 def _count_workdays(start_date, end_date) -> int:
@@ -216,11 +223,73 @@ async def _entries_to_json(entries: list[TimeEntry], base_location: str = "") ->
     }
 
 
+def _create_excel_file(
+    entries: list[TimeEntry],
+    file_path: Path,
+    base_location: str,
+    period_type: str
+) -> None:
+    """
+    Create Excel file from entries. Format matches 1C import.
+
+    Columns: Date, Fact hours, Project, Project phase, Location,
+             Description, Per diems, Title, Comment, Errors
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = f"{period_type}-to-date"
+
+    # Headers (10 columns for 1C import)
+    headers = ["Date", "Fact hours", "Project", "Project phase", "Location",
+               "Description", "Per diems", "Title", "Comment", "Errors"]
+    for col, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=header)
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill(start_color="CCCCCC", end_color="CCCCCC", fill_type="solid")
+
+    # Data rows
+    row = 2
+    for entry in entries:
+        if entry.is_excluded:
+            continue
+
+        # Build description: TASK * Description or just description
+        if entry.task_code and entry.description:
+            desc = f"{entry.task_code} * {entry.description}"
+        else:
+            desc = entry.description or entry.raw_summary[:100]
+
+        ws.cell(row=row, column=1, value=entry.date.strftime("%d.%m.%Y"))
+        ws.cell(row=row, column=2, value=entry.duration_hours)
+        ws.cell(row=row, column=3, value=entry.project_code or "")
+        ws.cell(row=row, column=4, value=entry.phase_code or "")
+        ws.cell(row=row, column=5, value=base_location)
+        ws.cell(row=row, column=6, value=desc)
+        ws.cell(row=row, column=7, value="")  # Per diems
+        ws.cell(row=row, column=8, value=entry.my_role or "")  # Title
+        ws.cell(row=row, column=9, value="")  # Comment
+        ws.cell(row=row, column=10, value="; ".join(entry.errors) if entry.errors else "")
+        row += 1
+
+    # Column widths (optimized for 1C)
+    widths = [12, 10, 12, 15, 12, 80, 10, 30, 15, 30]
+    for i, w in enumerate(widths, 1):
+        ws.column_dimensions[chr(64 + i)].width = w
+
+    wb.save(file_path)
+
+
 async def generate_report(
     report_type: str = "status",
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     account: Optional[str] = None,
+    export_file: bool = False,
 ) -> dict:
     """
     Generate project report.
@@ -230,10 +299,12 @@ async def generate_report(
         start_date: Start date for custom (YYYY-MM-DD)
         end_date: End date for custom (YYYY-MM-DD)
         account: Google account name
+        export_file: If True, generate Excel file and return download URL (TTL=1h)
 
     Returns:
         For status: week/month summaries with on-track percentages
-        For reports: summary + error_records + Excel file path (auto-saved)
+        For reports: summary + error_records + entries (JSON)
+        If export_file=True: summary + download_url + expires_in + filename
     """
     await ensure_database()
 
@@ -379,10 +450,40 @@ async def generate_report(
         workdays_elapsed=workdays_elapsed,
         billable_target_days=billable_target_days,
     )
-    
+
     error_records = _get_error_records(entries)
 
-    # Convert entries to JSON
+    # Export to Excel file if requested
+    if export_file:
+        file_uuid = uuid.uuid4().hex
+        filename = f"report_{start.strftime('%Y%m%d')}_{end.strftime('%Y%m%d')}.xlsx"
+        file_path = Path("/data/reports") / f"{file_uuid}.xlsx"
+
+        # Create Excel file
+        _create_excel_file(entries, file_path, base_location, report_type)
+
+        # Record in database (TTL = 1 hour)
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+        async with get_db() as conn:
+            await conn.execute(
+                """
+                INSERT INTO export_files (uuid, filename, file_path, expires_at)
+                VALUES ($1, $2, $3, $4)
+                """,
+                file_uuid, filename, str(file_path), expires_at
+            )
+
+        download_url = f"{EXPORT_BASE_URL}/export/{file_uuid}"
+
+        return {
+            "summary": summary,
+            "error_records": error_records,
+            "download_url": download_url,
+            "expires_in": "1 hour",
+            "filename": filename,
+        }
+
+    # Return JSON entries
     entries_data = await _entries_to_json(entries, base_location)
 
     return {

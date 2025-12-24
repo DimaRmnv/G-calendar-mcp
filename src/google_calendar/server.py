@@ -94,6 +94,7 @@ def create_http_app():
 
     from google_calendar.settings import settings
     from google_calendar.oauth_server import oauth_router, validate_access_token
+    from google_calendar.export_router import export_router
 
     # Get MCP app first to access its lifespan
     mcp_app = mcp.http_app()
@@ -105,6 +106,9 @@ def create_http_app():
         lifespan=mcp_app.lifespan  # Required for FastMCP session management
     )
 
+    # Add export router (no auth - UUID is the token)
+    app.include_router(export_router)
+
     # Add OAuth router under /mcp/calendar/oauth
     app.include_router(oauth_router, prefix="/mcp/calendar")
 
@@ -115,6 +119,10 @@ def create_http_app():
 
         # Skip auth check for OAuth endpoints
         if "/oauth" in request.url.path:
+            return await call_next(request)
+
+        # Skip for export downloads (UUID is the token)
+        if request.url.path.startswith("/export/"):
             return await call_next(request)
 
         # Skip for health check

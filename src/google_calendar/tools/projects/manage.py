@@ -272,16 +272,48 @@ async def _execute_operation(op: str, p: dict) -> dict:
     elif op == "report_status":
         return await generate_report(report_type="status", account=p.get("account"))
     elif op == "report_week":
-        return await generate_report(report_type="week", account=p.get("account"))
+        return await generate_report(
+            report_type="week",
+            account=p.get("account"),
+            export_file=p.get("export_file", False)
+        )
     elif op == "report_month":
-        return await generate_report(report_type="month", account=p.get("account"))
+        return await generate_report(
+            report_type="month",
+            account=p.get("account"),
+            export_file=p.get("export_file", False)
+        )
     elif op == "report_custom":
         return await generate_report(
             report_type="custom",
             start_date=p.get("start_date"),
             end_date=p.get("end_date"),
-            account=p.get("account")
+            account=p.get("account"),
+            export_file=p.get("export_file", False)
         )
+
+    # Export cleanup (TTL = 1 hour)
+    elif op == "cleanup_exports":
+        from pathlib import Path
+
+        async with get_db() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, file_path FROM export_files
+                WHERE expires_at < NOW() AND NOT is_deleted
+                """
+            )
+
+            deleted = 0
+            for row in rows:
+                Path(row["file_path"]).unlink(missing_ok=True)
+                await conn.execute(
+                    "UPDATE export_files SET is_deleted = TRUE WHERE id = $1",
+                    row["id"]
+                )
+                deleted += 1
+
+            return {"deleted": deleted, "message": f"Cleaned up {deleted} expired export files"}
 
     # Init (schema managed by workflow, this is just a check)
     elif op == "init":
@@ -337,6 +369,8 @@ async def projects(operations: list[dict]) -> dict:
         Roles: role_add, role_get, role_list, role_update, role_delete
         Norms: norm_add, norm_get, norm_list, norm_delete
         Reports: report_status, report_week, report_month, report_custom
+            → export_file=true: returns download_url for Excel (TTL=1h)
+        Export: cleanup_exports - delete expired files
         System: init, config_get, config_set, config_list, exclusion_*
 
     ROLES (contact role in project):

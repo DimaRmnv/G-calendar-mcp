@@ -216,6 +216,25 @@ INSERT INTO exclusions (pattern) VALUES
 ON CONFLICT (pattern) DO NOTHING;
 
 -- =============================================================================
+-- EXPORT FILES (temporary file storage with TTL)
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS export_files (
+    id SERIAL PRIMARY KEY,
+    uuid VARCHAR(32) NOT NULL UNIQUE,
+    filename VARCHAR(255) NOT NULL,
+    file_path VARCHAR(512) NOT NULL,
+    file_type VARCHAR(20) DEFAULT 'xlsx',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    downloaded_at TIMESTAMPTZ,
+    is_deleted BOOLEAN DEFAULT FALSE
+);
+
+CREATE INDEX IF NOT EXISTS idx_export_files_uuid ON export_files(uuid);
+CREATE INDEX IF NOT EXISTS idx_export_files_expires ON export_files(expires_at) WHERE NOT is_deleted;
+
+-- =============================================================================
 -- CONTACTS (Extended with organization FK and relationship tracking)
 -- =============================================================================
 
