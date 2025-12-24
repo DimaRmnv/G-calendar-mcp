@@ -3,22 +3,25 @@ GCalendar MCP Server.
 
 FastMCP server exposing Google Calendar tools for Claude Desktop.
 Supports both stdio (local) and HTTP (cloud) transport modes.
+
+Tools (7 total):
+- calendars: Calendar management, colors, settings, accounts
+- availability: Check freebusy, find meeting slots
+- events: List, create, get, update, delete, search, batch
+- attendees: Manage attendees, respond to invitations
+- weekly_brief: Weekly schedule overview
+- projects: Project management (phases, tasks, norms, reports)
+- contacts: Contact management (channels, assignments)
 """
 
 from fastmcp import FastMCP
 
-from google_calendar.tools.crud import (
-    list_events,
-    create_event,
-    get_event,
-    update_event,
-    delete_event,
-    search_events,
-    get_freebusy,
-)
-from google_calendar.tools.reference import manage_calendars, list_colors, manage_settings
-from google_calendar.tools.attendees import manage_attendees, respond_to_event
-from google_calendar.tools.intelligence import batch_operations, find_meeting_slots, weekly_brief
+# Unified tools (consolidated from 16 to 7)
+from google_calendar.tools.calendars import calendars
+from google_calendar.tools.availability import availability
+from google_calendar.tools.events import events
+from google_calendar.tools.attendees import attendees
+from google_calendar.tools.intelligence import weekly_brief
 from google_calendar.tools.projects import projects
 from google_calendar.tools.contacts import contacts
 
@@ -28,61 +31,47 @@ mcp = FastMCP(
     name="google-calendar",
     instructions="""Google Calendar integration. Multi-account support.
 
-CRITICAL - ACCOUNT SELECTION:
-When user mentions ANY calendar name ("личный", "personal", "рабочий", "work", "family", etc.):
-1. FIRST call manage_settings(action="list_accounts") to get available accounts
+ACCOUNT SELECTION:
+When user mentions calendar name ("личный", "personal", "рабочий", "work", etc.):
+1. Call calendars(action="list_accounts") to get available accounts
 2. Match user's description to account name
-3. Use account="<matched_name>" parameter in subsequent calls
-4. NEVER use default account when user specifies a calendar name
-Example: "в личном календаре" → list_accounts → find "personal" → account="personal"
+3. Use account="<matched_name>" in subsequent calls
 
 ACCOUNTS vs CALENDARS:
 - ACCOUNTS = different Google accounts (work, personal). Parameter: account="work"
 - CALENDARS = calendars within one account (primary, holidays). Parameter: calendar_id="primary"
-- "личный календарь" / "personal calendar" = ACCOUNT, not calendar_id
 
-TOOL SELECTION:
-Schedule: list_events (period="today"|"week") or weekly_brief
-Create: create_event (add_meet_link=True for video calls)
-Modify: update_event (scope="single"|"all"|"following" for recurring)
-Delete: delete_event (scope="single"|"all" for recurring)
-Search: search_events | Availability: get_freebusy, find_meeting_slots
-Attendees: manage_attendees | Bulk: batch_operations
-Reference: manage_calendars, list_colors, manage_settings
-Move event: update_event(destination_calendar_id=...) - call manage_calendars(action="list") first
+TOOLS (7):
+- calendars: Manage calendars, colors, settings, accounts
+  Actions: list, get, create, update, delete, colors, settings, set_timezone, list_accounts
 
-PROJECTS:
-projects(operations=[...]) - Manage projects, phases, tasks, norms, exclusions, config.
-  Use project_list_active when creating events to see available projects.
-  Reports: report_status, report_week, report_month, report_custom
+- availability: Check availability and find meeting slots
+  Actions: query (freebusy), find_slots (with timezone support)
 
-TIME: '2024-12-15T10:00:00' (timed) or '2024-12-15' (all-day)."""
+- events: All event operations
+  Actions: list, create, get, update, delete, search, batch
+  For recurring: scope="single"|"all"
+  For move: destination_calendar_id=...
+
+- attendees: Manage attendees and respond to invitations
+  Actions: list, add, remove, resend, respond
+
+- weekly_brief: Weekly schedule overview
+
+- projects: Project management (phases, tasks, norms, reports)
+  Operations: project_*, phase_*, task_*, norm_*, exclusion_*, config_*, report_*
+
+- contacts: Contact management (channels, assignments)
+
+TIME FORMAT: '2024-12-15T10:00:00' (timed) or '2024-12-15' (all-day)"""
 )
 
-# CRUD tools
-mcp.tool(list_events)
-mcp.tool(create_event)
-mcp.tool(get_event)
-mcp.tool(update_event)
-mcp.tool(delete_event)
-mcp.tool(search_events)
-mcp.tool(get_freebusy)
-
-# Reference tools
-mcp.tool(manage_calendars)
-mcp.tool(list_colors)
-mcp.tool(manage_settings)
-
-# Attendees tools
-mcp.tool(manage_attendees)
-mcp.tool(respond_to_event)
-
-# Intelligence tools
-mcp.tool(batch_operations)
-mcp.tool(find_meeting_slots)
+# Register all 7 tools
+mcp.tool(calendars)
+mcp.tool(availability)
+mcp.tool(events)
+mcp.tool(attendees)
 mcp.tool(weekly_brief)
-
-# Projects and Contacts tools - always enabled
 mcp.tool(projects)
 mcp.tool(contacts)
 
@@ -108,7 +97,7 @@ def create_http_app():
     app = FastAPI(
         title="Google Calendar MCP",
         description="MCP server for Google Calendar integration",
-        version="0.1.0",
+        version="0.2.0",
         lifespan=mcp_app.lifespan  # Required for FastMCP session management
     )
 
