@@ -82,6 +82,15 @@ def update_event(
         add_attendees: Add these email addresses to existing attendees
         remove_attendees: Remove these email addresses from attendees
         add_meet_link: If True, add Google Meet link (if not already present)
+
+    ADDING TEAMS MEETING LINK:
+    To add a Teams meeting link to an existing Google Calendar event:
+    1. Create event in Teams MCP with is_online_meeting=True to get Teams join URL
+    2. Update Google Calendar event with the Teams link in location or description:
+       update_event(event_id="...", location="https://teams.microsoft.com/l/meetup-join/...")
+
+    See create_event docstring for full workflow example.
+
         reminders_minutes: New reminder times in minutes (e.g., [10, 60])
         color_id: New color ID for the event
         visibility: 'public', 'private', or 'confidential'

@@ -1,10 +1,9 @@
 """
 Database management for time tracking.
 
-Supports both SQLite (local mode) and PostgreSQL (cloud mode).
-Database location:
-- SQLite: ~/.mcp/google-calendar/time_tracking.db
-- PostgreSQL: google_calendar_mcp database
+SQLite database schema and operations for projects, phases, tasks, norms, and settings.
+All entities have integer id as primary key for batch operations.
+Database location: ~/.mcp/google-calendar/time_tracking.db
 """
 
 import sqlite3
@@ -18,19 +17,6 @@ from google_calendar.utils.config import get_app_dir
 DATABASE_NAME = "time_tracking.db"
 
 
-def _is_cloud_mode() -> bool:
-    """Check if running in cloud mode (PostgreSQL configured)."""
-    try:
-        from google_calendar.db.connection import is_postgres_configured
-        return is_postgres_configured()
-    except ImportError:
-        return False
-
-
-# =============================================================================
-# SQLite Implementation (Local Mode)
-# =============================================================================
-
 def get_database_path() -> Path:
     """Get path to time tracking database."""
     return get_app_dir() / DATABASE_NAME
@@ -38,14 +24,12 @@ def get_database_path() -> Path:
 
 def database_exists() -> bool:
     """Check if database file exists."""
-    if _is_cloud_mode():
-        return True  # PostgreSQL schema is managed separately
     return get_database_path().exists()
 
 
 @contextmanager
 def get_connection():
-    """Context manager for database connections (SQLite)."""
+    """Context manager for database connections."""
     conn = sqlite3.connect(get_database_path())
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
@@ -176,8 +160,6 @@ def _migrate_add_is_active() -> None:
 
 def ensure_database() -> bool:
     """Ensure database exists and is initialized. Returns True if newly created."""
-    if _is_cloud_mode():
-        return False  # PostgreSQL schema managed separately
     newly_created = not database_exists()
     if newly_created:
         init_database()
@@ -302,11 +284,16 @@ def project_delete(id: int) -> bool:
 
 
 def project_list_active() -> list[dict]:
-    """Get active projects with their phases and tasks."""
+    """Get active projects with their phases and tasks.
+
+    Returns projects with complete structure for event creation.
+    Use this when creating time tracking events to know available projects.
+    """
     projects = project_list(active_only=True)
     for project in projects:
         project["phases"] = phase_list(project_id=project["id"])
         project["tasks"] = task_list(project_id=project["id"])
+        # Add format hint based on structure_level
         if project["structure_level"] == 1:
             project["format"] = "PROJECT * Description"
         elif project["structure_level"] == 2:
@@ -494,6 +481,7 @@ def norm_add(year: int, month: int, hours: float) -> dict:
             """,
             (year, month, hours)
         )
+        # Get the id
         cursor.execute("SELECT id FROM norms WHERE year = ? AND month = ?", (year, month))
         row = cursor.fetchone()
         return {"id": row["id"], "year": year, "month": month, "hours": hours}
@@ -546,6 +534,7 @@ def exclusion_add(pattern: str) -> dict:
         )
         if cursor.rowcount > 0:
             return {"id": cursor.lastrowid, "pattern": pattern, "created": True}
+        # Already exists, get id
         cursor.execute("SELECT id FROM exclusions WHERE pattern = ?", (pattern,))
         row = cursor.fetchone()
         return {"id": row["id"], "pattern": pattern, "created": False}
@@ -622,7 +611,12 @@ def get_project_by_code(code: str) -> Optional[dict]:
 
 
 def get_projects_by_code(code: str) -> list[dict]:
-    """Get ALL active projects with the same code, ordered by structure_level DESC."""
+    """Get ALL active projects with the same code, ordered by structure_level DESC.
+
+    This allows multiple projects with same code but different structure levels.
+    Example: CAYIB Level 3 (with phases+tasks) and CAYIB Level 2 (phases only).
+    Only returns active projects (is_active=1) for parser use.
+    """
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(

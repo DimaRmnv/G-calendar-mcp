@@ -345,6 +345,97 @@ contacts(operations=[{"op": "suggest_new_contacts", "period": "month", "sources"
 # Returns scan instructions for Claude to execute
 ```
 
+### Activity Brief (contact_brief)
+
+Generate a unified activity timeline across all communication channels for a contact. Returns fetch instructions for Claude to execute in parallel.
+
+```python
+# Get activity brief for contact
+contacts(operations=[{"op": "contact_brief", "contact_id": 8, "days_back": 7, "days_forward": 7}])
+```
+
+**Parameters**:
+- `contact_id` (required): Contact ID
+- `days_back` (default 7): Lookback period for messages and past meetings
+- `days_forward` (default 7): Lookahead period for upcoming calendar events
+
+**Available Sources** (auto-detected based on contact channels):
+
+| Source | Required Channel | Tool Used |
+|--------|------------------|----------|
+| Telegram | `telegram_chat_id` | `telegram:read_chat` |
+| Teams | `teams_chat_id` | `teams:read_messages` |
+| Gmail | `email` | `google-mail:find_context` |
+| Calendar | `email` | `google-calendar:search_events` |
+
+**Response Structure**:
+
+```json
+{
+  "contact": {"id": 8, "display_name": "Alex Tsybko", "organization": "BFC"},
+  "available_channels": {"email": [...], "telegram_chat_id": [...], "teams_chat_id": [...]},
+  "available_sources": ["telegram", "teams", "gmail", "calendar"],
+  "time_range": {"past": "7 days back (2025-12-13)", "future": "7 days forward"},
+  "fetch_instructions": [
+    {
+      "source": "telegram",
+      "priority": 1,
+      "tool": "telegram:read_chat",
+      "params": {"chat": 372068885, "limit": 70},
+      "filter_hint": "Filter messages where date >= 2025-12-13"
+    },
+    // ... more instructions for teams, gmail, calendar
+  ],
+  "workflow": ["1. Execute all priority=1 fetch instructions in parallel", ...],
+  "aggregation_hints": {
+    "timeline_merge": "Sort all messages/emails by date descending",
+    "highlight_unanswered": "Flag incoming messages without response within 24h"
+  }
+}
+```
+
+**Workflow for Claude**:
+
+1. Call `contact_brief` to get fetch instructions
+2. Execute all `priority=1` instructions in parallel
+3. If any fail, try `priority=2` alternatives
+4. Filter results by date range if tool doesn't support it natively
+5. Aggregate into unified brief with sections:
+   - Contact summary
+   - Upcoming events (calendar)
+   - Recent activity timeline (merged by date from all sources)
+   - Past meetings
+6. Highlight: last interaction date, next scheduled meeting, pending items
+
+**Message Limits** (auto-scaled based on `days_back`):
+- Telegram: `days_back * 10` (max 100)
+- Teams: `days_back * 5` (max 50)
+- Gmail: 20 emails via `find_context`
+- Calendar: 20 events per direction (past/upcoming)
+
+**Example Aggregated Output**:
+
+```
+## Alex Tsybko — Activity Brief (13-27 Dec 2025)
+
+Contact: BFC, Ukraine | Preferred: email | Telegram: @alextsybko
+
+### Upcoming Meetings
+- 24 Dec 16:00 — CAYIB weekly team sync (14 attendees, Teams)
+
+### Recent Activity Timeline
+| Date | Channel | Direction | Summary |
+|------|---------|-----------|-------|
+| 20 Dec 09:46 | Telegram | ← | Координация встречи в отеле |
+| 19 Dec 20:46 | Email | → | MFO scoring methodology на review |
+| 19 Dec 15:36 | Teams | ← | "It works!" (MCP test) |
+| 17 Dec 16:00 | Calendar | — | CAYIB team sync meeting |
+
+### Summary Stats
+- Telegram: 70 messages | Teams: 3 messages | Email: 13 in 11 threads
+- Meetings: 1 past, 1 upcoming
+```
+
 ## Multi-Account Usage
 
 When user mentions calendar names ("личный календарь", "work calendar", "family"):

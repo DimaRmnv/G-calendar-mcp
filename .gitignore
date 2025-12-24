@@ -50,3 +50,7 @@ Thumbs.db
 # Data directory (keep folder, ignore contents)
 data/*
 !data/.gitkeep
+
+# Secrets
+.env
+gc_data.sql

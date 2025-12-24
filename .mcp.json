@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "google-calendar": {
+      "type": "stdio",
+      "command": "/Users/dmytroromanov/PycharmProjects/G-calendar-mcp/.venv/bin/google-calendar-mcp",
+      "args": []
+    }
+  }
+}

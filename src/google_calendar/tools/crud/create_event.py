@@ -57,6 +57,34 @@ def create_event(
         timezone: Timezone as IANA name (e.g., Asia/Bangkok). Applied to naive datetime strings.
         attendees: List of attendee email addresses to invite
         add_meet_link: If True, generate Google Meet link
+
+    TEAMS MEETING LINK:
+    Google Calendar API does not support creating Teams meeting links directly.
+    To add a Teams meeting link to Google Calendar event:
+    1. Create a mirror event in Teams using Teams MCP:
+       teams.events(
+           action="create",
+           subject="Meeting title",
+           start="2025-01-20T14:00:00",
+           end="2025-01-20T15:00:00",
+           is_online_meeting=True  # This generates Teams link
+       )
+    2. Get the `online_meeting_url` from the Teams response
+    3. Add the Teams link to Google Calendar event:
+       - Either in `location` parameter: location="https://teams.microsoft.com/l/meetup-join/..."
+       - Or in `description` parameter with other meeting details
+
+    Example workflow:
+        # Step 1: Create Teams event to get meeting link
+        teams_result = teams.events(action="create", subject="Sync",
+                                     start="...", end="...", is_online_meeting=True)
+        teams_url = teams_result["event"]["online_meeting_url"]
+
+        # Step 2: Create Google Calendar event with Teams link
+        create_event(summary="Sync", start="...", end="...",
+                     location=teams_url,
+                     description=f"Join Teams meeting: {teams_url}")
+
         reminders_minutes: Reminder times in minutes before event (e.g., [10, 60])
         recurrence: RRULE format. Examples:
             - Daily for 5 days: ["RRULE:FREQ=DAILY;COUNT=5"]
