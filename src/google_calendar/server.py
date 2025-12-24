@@ -58,10 +58,14 @@ TOOLS (7):
 
 - weekly_brief: Weekly schedule overview
 
-- projects: Project management (phases, tasks, norms, reports)
+- projects: Project management (v2 schema)
   Operations: project_*, phase_*, task_*, norm_*, exclusion_*, config_*, report_*
+  Organizations: org_*, project_org_* (M:N with projects)
+  Hierarchy: PROJECT → PHASE → TASK (tasks linked to phases, not projects)
 
-- contacts: Contact management (channels, assignments)
+- contacts: Contact management (v2 schema)
+  organization_id links to organizations table
+  Relationship tracking: context, relationship_type, relationship_strength
 
 TIME FORMAT: '2024-12-15T10:00:00' (timed) or '2024-12-15' (all-day)"""
 )

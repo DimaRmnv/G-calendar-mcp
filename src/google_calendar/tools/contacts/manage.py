@@ -85,10 +85,17 @@ OPERATIONS = {
     "contact_add": lambda p: contact_add(
         first_name=p["first_name"], last_name=p["last_name"],
         organization=p.get("organization"), organization_type=p.get("organization_type"),
+        organization_id=p.get("organization_id"),  # v2: FK to organizations table
         job_title=p.get("job_title"), department=p.get("department"),
         country=p.get("country"), city=p.get("city"), timezone=p.get("timezone"),
         preferred_channel=p.get("preferred_channel", "email"),
-        preferred_language=p.get("preferred_language", "en"), notes=p.get("notes")
+        preferred_language=p.get("preferred_language", "en"),
+        # v2 relationship tracking
+        context=p.get("context"),
+        relationship_type=p.get("relationship_type"),
+        relationship_strength=p.get("relationship_strength"),
+        last_interaction_date=p.get("last_interaction_date"),
+        notes=p.get("notes")
     ),
     "contact_get": lambda p: contact_get(
         id=p.get("id"), email=p.get("email"), telegram=p.get("telegram"), phone=p.get("phone")
@@ -195,16 +202,25 @@ async def contacts(operations: list[dict]) -> dict:
     """
     Unified contacts management tool.
 
+    Schema v2 changes:
+    - organization_id: FK to organizations table (use with projects org_add)
+    - context: Relationship context/notes
+    - relationship_type: professional, personal, referral
+    - relationship_strength: weak, moderate, strong
+    - last_interaction_date: YYYY-MM-DD format
+
     Args:
         operations: List of operations. Each dict has 'op' + params.
 
     Operations:
         Contacts:
-            contact_add: first_name, last_name, organization?, organization_type?, 
-                        job_title?, country?, preferred_channel?, notes?
+            contact_add: first_name, last_name, organization?, organization_type?,
+                        organization_id? (v2: FK to organizations), job_title?, country?,
+                        preferred_channel?, context?, relationship_type?, relationship_strength?,
+                        last_interaction_date?, notes?
             contact_get: id OR email OR telegram OR phone
             contact_list: organization?, country?, project_id?, active_only?
-            contact_update: id + fields to update
+            contact_update: id + fields to update (supports all v2 fields)
             contact_delete: id
             contact_search: query, limit?, threshold? (fuzzy matching score 0-100, default 60)
 
@@ -267,8 +283,10 @@ async def contacts(operations: list[dict]) -> dict:
         organization_type: donor, client, partner, bfc, government, bank, mfi, other
         preferred_channel: email, telegram, teams, phone, whatsapp
         channel_type: email, phone, telegram_id, telegram_username, telegram_chat_id,
-                     teams_id, teams_chat_id, whatsapp, linkedin, skype
+                     teams_id, teams_chat_id, whatsapp, linkedin, skype, google_calendar
         role_category: consultant, client, donor, partner
+        relationship_type (v2): professional, personal, referral
+        relationship_strength (v2): weak, moderate, strong
 
     Example:
         contacts(operations=[

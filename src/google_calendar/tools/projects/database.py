@@ -1,10 +1,15 @@
 """
-Database management for time tracking.
+Database management for projects and organizations.
 
 Supports both SQLite (local mode) and PostgreSQL (cloud mode).
 Database location:
 - SQLite: ~/.mcp/google-calendar/time_tracking.db
 - PostgreSQL: google_calendar_mcp database
+
+Schema version 2:
+- Organizations table with M:N relationship to projects
+- Tasks linked to phases (not projects) for proper hierarchy: PROJECT → PHASE → TASK
+- Extended project fields (full_name, country, sector, dates, contract info)
 """
 
 import sqlite3
@@ -16,6 +21,22 @@ from google_calendar.utils.config import get_app_dir
 
 
 DATABASE_NAME = "time_tracking.db"
+SCHEMA_VERSION = 2
+
+# Organization types for organizations table
+ORGANIZATION_TYPES = (
+    'donor', 'dfi', 'government', 'bank', 'mfi', 'nbfi',
+    'consulting', 'ngo', 'other'
+)
+
+# Roles for project-organization relationships
+ORG_ROLES = (
+    'donor', 'client', 'implementing_agency',
+    'partner', 'subcontractor', 'beneficiary'
+)
+
+# Relationship statuses for organizations
+RELATIONSHIP_STATUSES = ('prospect', 'active', 'dormant', 'former')
 
 
 def _is_cloud_mode() -> bool:
@@ -60,22 +81,90 @@ def get_connection():
 
 
 def init_database() -> None:
-    """Initialize database with schema. All tables have id as primary key."""
+    """Initialize database with schema v2.
+
+    Creates tables:
+    - schema_version: tracks schema version for migrations
+    - organizations: organization registry with types and relationships
+    - projects: extended with business fields (full_name, country, sector, dates)
+    - project_organizations: M:N relationship between projects and organizations
+    - phases: project phases
+    - tasks: linked to phases (not projects) for proper hierarchy
+    - norms, exclusions, settings: time tracking config
+
+    All entities have integer id as primary key for batch operations.
+    """
     with get_connection() as conn:
         cursor = conn.cursor()
 
-        # Projects table - id is PK, code can repeat
+        # Schema version tracking
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS schema_version (
+                version INTEGER PRIMARY KEY,
+                applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
+
+        # Organizations table
+        cursor.execute(f"""
+            CREATE TABLE IF NOT EXISTS organizations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                short_name TEXT,
+                name_local TEXT,
+                organization_type TEXT CHECK(organization_type IN {ORGANIZATION_TYPES}),
+                parent_org_id INTEGER REFERENCES organizations(id),
+                country TEXT,
+                city TEXT,
+                website TEXT,
+                context TEXT,
+                relationship_status TEXT CHECK(relationship_status IN {RELATIONSHIP_STATUSES}),
+                first_contact_date DATE,
+                is_active INTEGER DEFAULT 1,
+                notes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Projects table - extended with business fields
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS projects (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 code TEXT NOT NULL,
+                full_name TEXT,
                 description TEXT NOT NULL,
+                country TEXT,
+                sector TEXT,
                 is_billable INTEGER NOT NULL DEFAULT 0,
                 is_active INTEGER NOT NULL DEFAULT 1,
                 position TEXT,
                 structure_level INTEGER NOT NULL DEFAULT 1,
+                start_date DATE,
+                end_date DATE,
+                contract_value DECIMAL(15,2),
+                currency TEXT DEFAULT 'EUR',
+                context TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Project-Organizations M:N junction table
+        cursor.execute(f"""
+            CREATE TABLE IF NOT EXISTS project_organizations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                organization_id INTEGER NOT NULL REFERENCES organizations(id),
+                org_role TEXT NOT NULL CHECK(org_role IN {ORG_ROLES}),
+                contract_value DECIMAL(15,2),
+                currency TEXT DEFAULT 'EUR',
+                is_lead INTEGER DEFAULT 0,
+                start_date DATE,
+                end_date DATE,
+                notes TEXT,
+                UNIQUE(project_id, organization_id, org_role)
             )
         """)
 
@@ -87,21 +176,23 @@ def init_database() -> None:
                 code TEXT NOT NULL,
                 description TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
                 UNIQUE(project_id, code)
             )
         """)
 
-        # Tasks table - references project by id
+        # Tasks table - v2: references PHASE by id (not project)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS tasks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                project_id INTEGER NOT NULL,
+                phase_id INTEGER NOT NULL,
                 code TEXT NOT NULL,
                 description TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
-                UNIQUE(project_id, code)
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (phase_id) REFERENCES phases(id) ON DELETE CASCADE,
+                UNIQUE(phase_id, code)
             )
         """)
 
@@ -136,10 +227,17 @@ def init_database() -> None:
         """)
 
         # Create indexes
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_phases_project ON phases(project_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_norms_year_month ON norms(year, month)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_organizations_type ON organizations(organization_type)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_organizations_country ON organizations(country)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_organizations_status ON organizations(relationship_status)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_projects_code ON projects(code)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_projects_active ON projects(is_active)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_projects_country ON projects(country)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_project_orgs_project ON project_organizations(project_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_project_orgs_org ON project_organizations(organization_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_phases_project ON phases(project_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_tasks_phase ON tasks(phase_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_norms_year_month ON norms(year, month)")
 
         # Insert default settings
         default_settings = [
@@ -164,14 +262,163 @@ def init_database() -> None:
             )
 
 
-def _migrate_add_is_active() -> None:
-    """Add is_active column to projects table if not exists."""
+def _migrate_v1_to_v2() -> None:
+    """Migrate database from v1 to v2 schema.
+
+    Changes:
+    - Add organizations table
+    - Add project_organizations M:N table
+    - Add extended fields to projects
+    - Migrate tasks from project_id to phase_id
+    """
     with get_connection() as conn:
         cursor = conn.cursor()
+
+        # Check current schema version
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'")
+        if not cursor.fetchone():
+            # Create schema_version table
+            cursor.execute("""
+                CREATE TABLE schema_version (
+                    version INTEGER PRIMARY KEY,
+                    applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cursor.execute("INSERT INTO schema_version (version) VALUES (1)")
+
+        cursor.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1")
+        row = cursor.fetchone()
+        current_version = row[0] if row else 1
+
+        if current_version >= SCHEMA_VERSION:
+            return  # Already migrated
+
+        # Add is_active to projects if missing (v1.x migration)
         cursor.execute("PRAGMA table_info(projects)")
-        columns = [col[1] for col in cursor.fetchall()]
-        if "is_active" not in columns:
+        project_columns = [col[1] for col in cursor.fetchall()]
+
+        if "is_active" not in project_columns:
             cursor.execute("ALTER TABLE projects ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
+
+        # Create organizations table if missing
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='organizations'")
+        if not cursor.fetchone():
+            cursor.execute(f"""
+                CREATE TABLE organizations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    short_name TEXT,
+                    name_local TEXT,
+                    organization_type TEXT CHECK(organization_type IN {ORGANIZATION_TYPES}),
+                    parent_org_id INTEGER REFERENCES organizations(id),
+                    country TEXT,
+                    city TEXT,
+                    website TEXT,
+                    context TEXT,
+                    relationship_status TEXT CHECK(relationship_status IN {RELATIONSHIP_STATUSES}),
+                    first_contact_date DATE,
+                    is_active INTEGER DEFAULT 1,
+                    notes TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cursor.execute("CREATE INDEX idx_organizations_type ON organizations(organization_type)")
+            cursor.execute("CREATE INDEX idx_organizations_country ON organizations(country)")
+            cursor.execute("CREATE INDEX idx_organizations_status ON organizations(relationship_status)")
+
+        # Create project_organizations table if missing
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='project_organizations'")
+        if not cursor.fetchone():
+            cursor.execute(f"""
+                CREATE TABLE project_organizations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                    organization_id INTEGER NOT NULL REFERENCES organizations(id),
+                    org_role TEXT NOT NULL CHECK(org_role IN {ORG_ROLES}),
+                    contract_value DECIMAL(15,2),
+                    currency TEXT DEFAULT 'EUR',
+                    is_lead INTEGER DEFAULT 0,
+                    start_date DATE,
+                    end_date DATE,
+                    notes TEXT,
+                    UNIQUE(project_id, organization_id, org_role)
+                )
+            """)
+            cursor.execute("CREATE INDEX idx_project_orgs_project ON project_organizations(project_id)")
+            cursor.execute("CREATE INDEX idx_project_orgs_org ON project_organizations(organization_id)")
+
+        # Add new columns to projects
+        new_project_cols = ['full_name', 'country', 'sector', 'start_date', 'end_date',
+                          'contract_value', 'currency', 'context']
+        for col in new_project_cols:
+            if col not in project_columns:
+                if col == 'currency':
+                    cursor.execute(f"ALTER TABLE projects ADD COLUMN {col} TEXT DEFAULT 'EUR'")
+                elif col in ('contract_value',):
+                    cursor.execute(f"ALTER TABLE projects ADD COLUMN {col} DECIMAL(15,2)")
+                elif col in ('start_date', 'end_date'):
+                    cursor.execute(f"ALTER TABLE projects ADD COLUMN {col} DATE")
+                else:
+                    cursor.execute(f"ALTER TABLE projects ADD COLUMN {col} TEXT")
+
+        # Add updated_at to phases if missing
+        cursor.execute("PRAGMA table_info(phases)")
+        phase_columns = [col[1] for col in cursor.fetchall()]
+        if "updated_at" not in phase_columns:
+            # SQLite doesn't allow non-constant defaults in ALTER TABLE, so add with NULL default
+            cursor.execute("ALTER TABLE phases ADD COLUMN updated_at TIMESTAMP")
+            cursor.execute("UPDATE phases SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL")
+
+        # Migrate tasks from project_id to phase_id
+        cursor.execute("PRAGMA table_info(tasks)")
+        task_columns = [col[1] for col in cursor.fetchall()]
+
+        if "project_id" in task_columns and "phase_id" not in task_columns:
+            # Need to migrate tasks to phases
+            # Step 1: Create default phase for each project that has tasks
+            cursor.execute("""
+                INSERT INTO phases (project_id, code, description)
+                SELECT DISTINCT t.project_id, 'DEFAULT', 'Default phase (migrated)'
+                FROM tasks t
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM phases p WHERE p.project_id = t.project_id
+                )
+            """)
+
+            # Step 2: Create new tasks table with phase_id
+            cursor.execute("""
+                CREATE TABLE tasks_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    phase_id INTEGER NOT NULL,
+                    code TEXT NOT NULL,
+                    description TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (phase_id) REFERENCES phases(id) ON DELETE CASCADE,
+                    UNIQUE(phase_id, code)
+                )
+            """)
+
+            # Step 3: Migrate tasks to first phase of their project
+            cursor.execute("""
+                INSERT INTO tasks_new (id, phase_id, code, description, created_at)
+                SELECT
+                    t.id,
+                    (SELECT p.id FROM phases p WHERE p.project_id = t.project_id ORDER BY p.id LIMIT 1),
+                    t.code,
+                    t.description,
+                    t.created_at
+                FROM tasks t
+            """)
+
+            # Step 4: Replace tables
+            cursor.execute("DROP TABLE tasks")
+            cursor.execute("ALTER TABLE tasks_new RENAME TO tasks")
+            cursor.execute("CREATE INDEX idx_tasks_phase ON tasks(phase_id)")
+
+        # Update schema version
+        cursor.execute("INSERT OR REPLACE INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
 
 
 def ensure_database() -> bool:
@@ -183,7 +430,7 @@ def ensure_database() -> bool:
         init_database()
     else:
         # Run migrations for existing database
-        _migrate_add_is_active()
+        _migrate_v1_to_v2()
     return newly_created
 
 
@@ -197,27 +444,31 @@ def project_add(
     is_billable: bool = False,
     is_active: bool = True,
     position: Optional[str] = None,
-    structure_level: int = 1
+    structure_level: int = 1,
+    # v2 fields
+    full_name: Optional[str] = None,
+    country: Optional[str] = None,
+    sector: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    contract_value: Optional[float] = None,
+    currency: str = 'EUR',
+    context: Optional[str] = None,
 ) -> dict:
-    """Create a new project. Returns created project with id."""
+    """Create a new project with v2 business fields. Returns created project with id."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT INTO projects (code, description, is_billable, is_active, position, structure_level)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO projects (code, description, is_billable, is_active, position, structure_level,
+                                 full_name, country, sector, start_date, end_date, contract_value, currency, context)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (code.upper(), description, int(is_billable), int(is_active), position, structure_level)
+            (code.upper(), description, int(is_billable), int(is_active), position, structure_level,
+             full_name, country, sector, start_date, end_date, contract_value, currency, context)
         )
-        return {
-            "id": cursor.lastrowid,
-            "code": code.upper(),
-            "description": description,
-            "is_billable": is_billable,
-            "is_active": is_active,
-            "position": position,
-            "structure_level": structure_level
-        }
+        new_id = cursor.lastrowid
+    return project_get(id=new_id)
 
 
 def project_get(id: Optional[int] = None, code: Optional[str] = None) -> Optional[dict]:
@@ -265,8 +516,9 @@ def project_list(billable_only: bool = False, active_only: bool = False) -> list
 
 
 def project_update(id: int, **kwargs) -> Optional[dict]:
-    """Update project by id."""
-    allowed_fields = {"code", "description", "is_billable", "is_active", "position", "structure_level"}
+    """Update project by id. Supports v2 fields."""
+    allowed_fields = {"code", "description", "is_billable", "is_active", "position", "structure_level",
+                     "full_name", "country", "sector", "start_date", "end_date", "contract_value", "currency", "context"}
     updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
 
     if not updates:
@@ -401,32 +653,28 @@ def phase_delete(id: int) -> bool:
 # Tasks CRUD
 # =============================================================================
 
-def task_add(project_id: int, code: str, description: Optional[str] = None) -> dict:
-    """Create a new task for a project."""
+def task_add(phase_id: int, code: str, description: Optional[str] = None) -> dict:
+    """Create a new task for a phase. Tasks are linked to phases, not directly to projects."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO tasks (project_id, code, description) VALUES (?, ?, ?)",
-            (project_id, code.upper(), description)
+            "INSERT INTO tasks (phase_id, code, description) VALUES (?, ?, ?)",
+            (phase_id, code.upper(), description)
         )
-        return {
-            "id": cursor.lastrowid,
-            "project_id": project_id,
-            "code": code.upper(),
-            "description": description
-        }
+        new_id = cursor.lastrowid
+    return task_get(id=new_id)
 
 
-def task_get(id: Optional[int] = None, project_id: Optional[int] = None, code: Optional[str] = None) -> Optional[dict]:
-    """Get task by id or by project_id + code."""
+def task_get(id: Optional[int] = None, phase_id: Optional[int] = None, code: Optional[str] = None) -> Optional[dict]:
+    """Get task by id or by phase_id + code."""
     with get_connection() as conn:
         cursor = conn.cursor()
         if id is not None:
             cursor.execute("SELECT * FROM tasks WHERE id = ?", (id,))
-        elif project_id is not None and code is not None:
+        elif phase_id is not None and code is not None:
             cursor.execute(
-                "SELECT * FROM tasks WHERE project_id = ? AND code = ?",
-                (project_id, code.upper())
+                "SELECT * FROM tasks WHERE phase_id = ? AND code = ?",
+                (phase_id, code.upper())
             )
         else:
             return None
@@ -434,23 +682,34 @@ def task_get(id: Optional[int] = None, project_id: Optional[int] = None, code: O
         return dict(row) if row else None
 
 
-def task_list(project_id: Optional[int] = None) -> list[dict]:
-    """List tasks, optionally filtered by project."""
+def task_list(phase_id: Optional[int] = None, project_id: Optional[int] = None) -> list[dict]:
+    """List tasks, optionally filtered by phase or project (via phases)."""
     with get_connection() as conn:
         cursor = conn.cursor()
-        if project_id is not None:
+        if phase_id is not None:
             cursor.execute(
-                "SELECT * FROM tasks WHERE project_id = ? ORDER BY code",
+                "SELECT * FROM tasks WHERE phase_id = ? ORDER BY code",
+                (phase_id,)
+            )
+        elif project_id is not None:
+            # Get all tasks for all phases of this project
+            cursor.execute(
+                """
+                SELECT t.* FROM tasks t
+                JOIN phases p ON t.phase_id = p.id
+                WHERE p.project_id = ?
+                ORDER BY p.code, t.code
+                """,
                 (project_id,)
             )
         else:
-            cursor.execute("SELECT * FROM tasks ORDER BY project_id, code")
+            cursor.execute("SELECT * FROM tasks ORDER BY phase_id, code")
         return [dict(row) for row in cursor.fetchall()]
 
 
 def task_update(id: int, **kwargs) -> Optional[dict]:
-    """Update task by id."""
-    allowed_fields = {"code", "description"}
+    """Update task by id. Can move task to different phase via phase_id."""
+    allowed_fields = {"code", "description", "phase_id"}
     updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
 
     if not updates:
@@ -647,11 +906,33 @@ def get_phase_by_code(project_code: str, phase_code: str) -> Optional[dict]:
 
 
 def get_task_by_code(project_code: str, task_code: str) -> Optional[dict]:
-    """Get task by project code and task code (for parser)."""
+    """Get task by project code and task code (for parser).
+
+    v2 note: Tasks are now linked to phases, not projects.
+    This function searches all phases of the project for the task.
+    """
     project = project_get(code=project_code)
     if not project:
         return None
-    return task_get(project_id=project["id"], code=task_code)
+    # Search all phases of the project for this task
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT t.* FROM tasks t
+            JOIN phases p ON t.phase_id = p.id
+            WHERE p.project_id = ? AND t.code = ?
+            LIMIT 1
+            """,
+            (project["id"], task_code.upper())
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def get_task_by_project_code(project_code: str, task_code: str) -> Optional[dict]:
+    """Alias for get_task_by_code for backward compatibility."""
+    return get_task_by_code(project_code, task_code)
 
 
 # Aliases for backward compatibility with parser
@@ -660,3 +941,339 @@ get_phase = get_phase_by_code
 get_task = get_task_by_code
 get_setting = config_get
 get_norm = lambda year, month: norm_get(year=year, month=month)
+
+
+# =============================================================================
+# Organizations CRUD (v2)
+# =============================================================================
+
+def org_add(
+    name: str,
+    short_name: Optional[str] = None,
+    name_local: Optional[str] = None,
+    organization_type: Optional[str] = None,
+    parent_org_id: Optional[int] = None,
+    country: Optional[str] = None,
+    city: Optional[str] = None,
+    website: Optional[str] = None,
+    context: Optional[str] = None,
+    relationship_status: str = 'active',
+    first_contact_date: Optional[str] = None,
+    notes: Optional[str] = None,
+) -> dict:
+    """Create a new organization."""
+    if organization_type and organization_type not in ORGANIZATION_TYPES:
+        raise ValueError(f"Invalid organization_type. Must be one of: {ORGANIZATION_TYPES}")
+    if relationship_status not in RELATIONSHIP_STATUSES:
+        raise ValueError(f"Invalid relationship_status. Must be one of: {RELATIONSHIP_STATUSES}")
+
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO organizations (name, short_name, name_local, organization_type, parent_org_id,
+                                      country, city, website, context, relationship_status, first_contact_date, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (name, short_name, name_local, organization_type, parent_org_id,
+             country, city, website, context, relationship_status, first_contact_date, notes)
+        )
+        new_id = cursor.lastrowid
+    return org_get(id=new_id)
+
+
+def org_get(id: Optional[int] = None, name: Optional[str] = None) -> Optional[dict]:
+    """Get organization by id or name."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        if id is not None:
+            cursor.execute("SELECT * FROM organizations WHERE id = ?", (id,))
+        elif name is not None:
+            cursor.execute("SELECT * FROM organizations WHERE name = ?", (name,))
+        else:
+            return None
+        row = cursor.fetchone()
+        if row:
+            result = dict(row)
+            result["is_active"] = bool(result.get("is_active", 1))
+            return result
+        return None
+
+
+def org_list(
+    organization_type: Optional[str] = None,
+    country: Optional[str] = None,
+    relationship_status: Optional[str] = None,
+    active_only: bool = True,
+) -> list[dict]:
+    """List organizations with optional filters."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        conditions = []
+        params = []
+
+        if organization_type:
+            conditions.append("organization_type = ?")
+            params.append(organization_type)
+        if country:
+            conditions.append("country = ?")
+            params.append(country)
+        if relationship_status:
+            conditions.append("relationship_status = ?")
+            params.append(relationship_status)
+        if active_only:
+            conditions.append("is_active = 1")
+
+        query = "SELECT * FROM organizations"
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY name"
+
+        cursor.execute(query, params)
+        results = []
+        for row in cursor.fetchall():
+            item = dict(row)
+            item["is_active"] = bool(item.get("is_active", 1))
+            results.append(item)
+        return results
+
+
+def org_update(id: int, **kwargs) -> Optional[dict]:
+    """Update organization by id."""
+    allowed_fields = {"name", "short_name", "name_local", "organization_type", "parent_org_id",
+                     "country", "city", "website", "context", "relationship_status",
+                     "first_contact_date", "is_active", "notes"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
+
+    if not updates:
+        return org_get(id=id)
+
+    if "organization_type" in updates and updates["organization_type"] not in ORGANIZATION_TYPES:
+        raise ValueError(f"Invalid organization_type. Must be one of: {ORGANIZATION_TYPES}")
+    if "relationship_status" in updates and updates["relationship_status"] not in RELATIONSHIP_STATUSES:
+        raise ValueError(f"Invalid relationship_status. Must be one of: {RELATIONSHIP_STATUSES}")
+    if "is_active" in updates:
+        updates["is_active"] = int(updates["is_active"])
+
+    set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
+    values = list(updates.values()) + [id]
+
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"UPDATE organizations SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            values
+        )
+        if cursor.rowcount == 0:
+            return None
+    return org_get(id=id)
+
+
+def org_delete(id: int) -> bool:
+    """Delete organization by id."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM organizations WHERE id = ?", (id,))
+        return cursor.rowcount > 0
+
+
+def org_search(query: str, limit: int = 20) -> list[dict]:
+    """Search organizations by name or short_name."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        search_pattern = f"%{query}%"
+        cursor.execute(
+            """
+            SELECT * FROM organizations
+            WHERE name LIKE ? COLLATE NOCASE
+               OR short_name LIKE ? COLLATE NOCASE
+               OR name_local LIKE ? COLLATE NOCASE
+            ORDER BY name
+            LIMIT ?
+            """,
+            (search_pattern, search_pattern, search_pattern, limit)
+        )
+        results = []
+        for row in cursor.fetchall():
+            item = dict(row)
+            item["is_active"] = bool(item.get("is_active", 1))
+            results.append(item)
+        return results
+
+
+# =============================================================================
+# Project-Organization Links CRUD (v2)
+# =============================================================================
+
+def project_org_add(
+    project_id: int,
+    organization_id: int,
+    org_role: str,
+    contract_value: Optional[float] = None,
+    currency: str = 'EUR',
+    is_lead: bool = False,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    notes: Optional[str] = None,
+) -> dict:
+    """Link an organization to a project with a specific role."""
+    if org_role not in ORG_ROLES:
+        raise ValueError(f"Invalid org_role. Must be one of: {ORG_ROLES}")
+
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO project_organizations (project_id, organization_id, org_role,
+                                              contract_value, currency, is_lead, start_date, end_date, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (project_id, organization_id, org_role, contract_value, currency, int(is_lead), start_date, end_date, notes)
+        )
+        new_id = cursor.lastrowid
+    return project_org_get(id=new_id)
+
+
+def project_org_get(id: int) -> Optional[dict]:
+    """Get project-organization link by id."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT po.*, p.code as project_code, o.name as organization_name
+            FROM project_organizations po
+            JOIN projects p ON po.project_id = p.id
+            JOIN organizations o ON po.organization_id = o.id
+            WHERE po.id = ?
+            """,
+            (id,)
+        )
+        row = cursor.fetchone()
+        if row:
+            result = dict(row)
+            result["is_lead"] = bool(result.get("is_lead", 0))
+            return result
+        return None
+
+
+def project_org_list(
+    project_id: Optional[int] = None,
+    organization_id: Optional[int] = None,
+    org_role: Optional[str] = None,
+) -> list[dict]:
+    """List project-organization links with optional filters."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        conditions = []
+        params = []
+
+        if project_id:
+            conditions.append("po.project_id = ?")
+            params.append(project_id)
+        if organization_id:
+            conditions.append("po.organization_id = ?")
+            params.append(organization_id)
+        if org_role:
+            conditions.append("po.org_role = ?")
+            params.append(org_role)
+
+        query = """
+            SELECT po.*, p.code as project_code, o.name as organization_name
+            FROM project_organizations po
+            JOIN projects p ON po.project_id = p.id
+            JOIN organizations o ON po.organization_id = o.id
+        """
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY po.project_id, po.is_lead DESC, o.name"
+
+        cursor.execute(query, params)
+        results = []
+        for row in cursor.fetchall():
+            item = dict(row)
+            item["is_lead"] = bool(item.get("is_lead", 0))
+            results.append(item)
+        return results
+
+
+def project_org_update(id: int, **kwargs) -> Optional[dict]:
+    """Update project-organization link by id."""
+    allowed_fields = {"org_role", "contract_value", "currency", "is_lead", "start_date", "end_date", "notes"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
+
+    if not updates:
+        return project_org_get(id=id)
+
+    if "org_role" in updates and updates["org_role"] not in ORG_ROLES:
+        raise ValueError(f"Invalid org_role. Must be one of: {ORG_ROLES}")
+    if "is_lead" in updates:
+        updates["is_lead"] = int(updates["is_lead"])
+
+    set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
+    values = list(updates.values()) + [id]
+
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(f"UPDATE project_organizations SET {set_clause} WHERE id = ?", values)
+        if cursor.rowcount == 0:
+            return None
+    return project_org_get(id=id)
+
+
+def project_org_delete(id: int) -> bool:
+    """Delete project-organization link by id."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM project_organizations WHERE id = ?", (id,))
+        return cursor.rowcount > 0
+
+
+def get_project_organizations(project_id: int) -> list[dict]:
+    """Get all organizations linked to a project."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT o.*, po.org_role, po.is_lead, po.contract_value as link_contract_value,
+                   po.currency as link_currency, po.start_date as link_start_date,
+                   po.end_date as link_end_date, po.notes as link_notes
+            FROM organizations o
+            JOIN project_organizations po ON o.id = po.organization_id
+            WHERE po.project_id = ?
+            ORDER BY po.is_lead DESC, o.name
+            """,
+            (project_id,)
+        )
+        results = []
+        for row in cursor.fetchall():
+            item = dict(row)
+            item["is_active"] = bool(item.get("is_active", 1))
+            item["is_lead"] = bool(item.get("is_lead", 0))
+            results.append(item)
+        return results
+
+
+def get_organization_projects(organization_id: int) -> list[dict]:
+    """Get all projects linked to an organization."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT p.*, po.org_role, po.is_lead, po.contract_value as link_contract_value,
+                   po.currency as link_currency, po.start_date as link_start_date,
+                   po.end_date as link_end_date, po.notes as link_notes
+            FROM projects p
+            JOIN project_organizations po ON p.id = po.project_id
+            WHERE po.organization_id = ?
+            ORDER BY p.is_active DESC, p.code
+            """,
+            (organization_id,)
+        )
+        results = []
+        for row in cursor.fetchall():
+            item = dict(row)
+            item["is_billable"] = bool(item.get("is_billable", 0))
+            item["is_active"] = bool(item.get("is_active", 1))
+            item["is_lead"] = bool(item.get("is_lead", 0))
+            results.append(item)
+        return results

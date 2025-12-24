@@ -4,6 +4,11 @@ Database management for contacts.
 Extends the existing time_tracking.db with contacts tables.
 Tables: contacts, contact_channels, project_roles, contact_projects
 Database location: ~/.mcp/google-calendar/time_tracking.db
+
+Schema v2 changes:
+- contacts.organization_id: FK to organizations table
+- contacts: Extended with context, relationship_type, relationship_strength, last_interaction_date
+- contact_channels.last_used_at: Track last usage of channel
 """
 
 import sqlite3
@@ -24,6 +29,7 @@ from google_calendar.utils.config import get_app_dir
 DATABASE_NAME = "time_tracking.db"
 
 # Valid values for CHECK constraints
+# Note: organization_type in contacts is for backward compat, new orgs use organizations table
 ORGANIZATION_TYPES = ('donor', 'client', 'partner', 'bfc', 'government', 'bank', 'mfi', 'other')
 PREFERRED_CHANNELS = ('email', 'telegram', 'teams', 'phone', 'whatsapp')
 CHANNEL_TYPES = (
@@ -31,6 +37,10 @@ CHANNEL_TYPES = (
     'teams_id', 'teams_chat_id', 'whatsapp', 'linkedin', 'skype', 'google_calendar'
 )
 ROLE_CATEGORIES = ('consultant', 'client', 'donor', 'partner')
+
+# New v2 constants for contacts
+RELATIONSHIP_TYPES = ('professional', 'personal', 'referral')
+RELATIONSHIP_STRENGTHS = ('weak', 'moderate', 'strong')
 
 # Standard project roles
 STANDARD_ROLES = [
@@ -99,42 +109,55 @@ def get_connection():
 
 
 def init_contacts_schema() -> None:
-    """Initialize contacts tables in the database."""
+    """Initialize contacts tables in the database.
+
+    Creates tables for contacts with v2 schema including:
+    - organization_id FK to organizations table
+    - context, relationship_type, relationship_strength, last_interaction_date
+    - contact_channels.last_used_at
+    """
     with get_connection() as conn:
         cursor = conn.cursor()
 
         # ---------------------------------------------------------------------
-        # CONTACTS - Core contact information
+        # CONTACTS - Core contact information (v2 schema)
         # ---------------------------------------------------------------------
         cursor.execute(f"""
             CREATE TABLE IF NOT EXISTS contacts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                
+
                 -- Basic info
                 first_name TEXT NOT NULL,
                 last_name TEXT NOT NULL,
                 display_name TEXT GENERATED ALWAYS AS (first_name || ' ' || last_name) STORED,
-                
-                -- Organization
-                organization TEXT,
-                organization_type TEXT CHECK(organization_type IN 
+
+                -- Organization (v2: FK to organizations table)
+                organization_id INTEGER REFERENCES organizations(id),
+                organization TEXT,  -- Legacy: text name, use organization_id for FK
+                organization_type TEXT CHECK(organization_type IN
                     {ORGANIZATION_TYPES}),
                 job_title TEXT,
                 department TEXT,
-                
+
                 -- Location & Time
                 country TEXT,
                 city TEXT,
                 timezone TEXT,
-                
+
                 -- Communication preferences
-                preferred_channel TEXT DEFAULT 'email' CHECK(preferred_channel IN 
+                preferred_channel TEXT DEFAULT 'email' CHECK(preferred_channel IN
                     {PREFERRED_CHANNELS}),
                 preferred_language TEXT DEFAULT 'en',
-                
+
+                -- Relationship tracking (v2)
+                context TEXT,
+                relationship_type TEXT CHECK(relationship_type IN {RELATIONSHIP_TYPES}),
+                relationship_strength TEXT CHECK(relationship_strength IN {RELATIONSHIP_STRENGTHS}),
+                last_interaction_date DATE,
+
                 -- Notes
                 notes TEXT,
-                
+
                 -- Metadata
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -143,20 +166,21 @@ def init_contacts_schema() -> None:
         """)
 
         # ---------------------------------------------------------------------
-        # CONTACT_CHANNELS - All contact methods
+        # CONTACT_CHANNELS - All contact methods (v2: added last_used_at)
         # ---------------------------------------------------------------------
         cursor.execute(f"""
             CREATE TABLE IF NOT EXISTS contact_channels (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 contact_id INTEGER NOT NULL,
-                
-                channel_type TEXT NOT NULL CHECK(channel_type IN 
+
+                channel_type TEXT NOT NULL CHECK(channel_type IN
                     {CHANNEL_TYPES}),
                 channel_value TEXT NOT NULL,
                 channel_label TEXT,
                 is_primary BOOLEAN DEFAULT FALSE,
+                last_used_at DATETIME,
                 notes TEXT,
-                
+
                 FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
                 UNIQUE(contact_id, channel_type, channel_value)
             )
@@ -317,18 +341,60 @@ def init_contacts_schema() -> None:
         """)
 
 
+def _migrate_contacts_v2() -> None:
+    """Migrate contacts tables to v2 schema.
+
+    Adds:
+    - contacts: organization_id, context, relationship_type, relationship_strength, last_interaction_date
+    - contact_channels: last_used_at
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+
+        # Add new columns to contacts if missing
+        cursor.execute("PRAGMA table_info(contacts)")
+        contact_columns = [col[1] for col in cursor.fetchall()]
+
+        if "organization_id" not in contact_columns:
+            cursor.execute("ALTER TABLE contacts ADD COLUMN organization_id INTEGER REFERENCES organizations(id)")
+        if "context" not in contact_columns:
+            cursor.execute("ALTER TABLE contacts ADD COLUMN context TEXT")
+        if "relationship_type" not in contact_columns:
+            cursor.execute(f"ALTER TABLE contacts ADD COLUMN relationship_type TEXT CHECK(relationship_type IN {RELATIONSHIP_TYPES})")
+        if "relationship_strength" not in contact_columns:
+            cursor.execute(f"ALTER TABLE contacts ADD COLUMN relationship_strength TEXT CHECK(relationship_strength IN {RELATIONSHIP_STRENGTHS})")
+        if "last_interaction_date" not in contact_columns:
+            cursor.execute("ALTER TABLE contacts ADD COLUMN last_interaction_date DATE")
+
+        # Add last_used_at to contact_channels if missing
+        cursor.execute("PRAGMA table_info(contact_channels)")
+        channel_columns = [col[1] for col in cursor.fetchall()]
+
+        if "last_used_at" not in channel_columns:
+            cursor.execute("ALTER TABLE contact_channels ADD COLUMN last_used_at DATETIME")
+
+        # Create index on organization_id if not exists
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_contacts_org ON contacts(organization_id)")
+
+
 def ensure_contacts_schema() -> bool:
-    """Ensure contacts tables exist. Returns True if newly created."""
+    """Ensure contacts tables exist and are up to date. Returns True if newly created.
+
+    Also runs migrations for v2 schema changes.
+    """
     if not database_exists():
         # Database doesn't exist - need to init time_tracking first
         raise RuntimeError(
             "Database does not exist. Enable time_tracking first to create the database, "
             "or run time_tracking init."
         )
-    
+
     newly_created = not contacts_tables_exist()
     if newly_created:
         init_contacts_schema()
+    else:
+        # Run migrations for existing contacts tables
+        _migrate_contacts_v2()
     return newly_created
 
 
@@ -341,6 +407,7 @@ def contact_add(
     last_name: str,
     organization: Optional[str] = None,
     organization_type: Optional[str] = None,
+    organization_id: Optional[int] = None,  # v2: FK to organizations
     job_title: Optional[str] = None,
     department: Optional[str] = None,
     country: Optional[str] = None,
@@ -348,28 +415,64 @@ def contact_add(
     timezone: Optional[str] = None,
     preferred_channel: str = 'email',
     preferred_language: str = 'en',
+    # v2 relationship fields
+    context: Optional[str] = None,
+    relationship_type: Optional[str] = None,
+    relationship_strength: Optional[str] = None,
+    last_interaction_date: Optional[str] = None,
     notes: Optional[str] = None
 ) -> dict:
-    """Create a new contact. Returns created contact with id."""
+    """Create a new contact with relationship tracking.
+
+    Args:
+        first_name: First name (required)
+        last_name: Last name (required)
+        organization: Organization name (legacy, prefer organization_id)
+        organization_type: Type of organization
+        organization_id: FK to organizations table (v2)
+        job_title: Job title
+        department: Department
+        country: Country
+        city: City
+        timezone: Timezone (IANA format)
+        preferred_channel: Preferred communication channel
+        preferred_language: Preferred language code
+        context: Relationship context/notes (v2)
+        relationship_type: One of: professional, personal, referral (v2)
+        relationship_strength: One of: weak, moderate, strong (v2)
+        last_interaction_date: Last interaction date YYYY-MM-DD (v2)
+        notes: Additional notes
+
+    Returns:
+        Created contact dict with id
+    """
     # Validate enums
     if organization_type and organization_type not in ORGANIZATION_TYPES:
         raise ValueError(f"Invalid organization_type. Must be one of: {ORGANIZATION_TYPES}")
     if preferred_channel not in PREFERRED_CHANNELS:
         raise ValueError(f"Invalid preferred_channel. Must be one of: {PREFERRED_CHANNELS}")
-    
+    if relationship_type and relationship_type not in RELATIONSHIP_TYPES:
+        raise ValueError(f"Invalid relationship_type. Must be one of: {RELATIONSHIP_TYPES}")
+    if relationship_strength and relationship_strength not in RELATIONSHIP_STRENGTHS:
+        raise ValueError(f"Invalid relationship_strength. Must be one of: {RELATIONSHIP_STRENGTHS}")
+
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
             INSERT INTO contacts (
-                first_name, last_name, organization, organization_type,
+                first_name, last_name, organization, organization_type, organization_id,
                 job_title, department, country, city, timezone,
-                preferred_channel, preferred_language, notes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                preferred_channel, preferred_language,
+                context, relationship_type, relationship_strength, last_interaction_date,
+                notes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (first_name, last_name, organization, organization_type,
+            (first_name, last_name, organization, organization_type, organization_id,
              job_title, department, country, city, timezone,
-             preferred_channel, preferred_language, notes)
+             preferred_channel, preferred_language,
+             context, relationship_type, relationship_strength, last_interaction_date,
+             notes)
         )
         new_id = cursor.lastrowid
     # Fetch after commit
@@ -473,26 +576,37 @@ def contact_list(
 
 
 def contact_update(id: int, **kwargs) -> Optional[dict]:
-    """Update contact by id."""
+    """Update contact by id.
+
+    Allowed fields: first_name, last_name, organization, organization_type, organization_id,
+    job_title, department, country, city, timezone, preferred_channel, preferred_language,
+    context, relationship_type, relationship_strength, last_interaction_date, notes, is_active
+    """
     allowed_fields = {
-        'first_name', 'last_name', 'organization', 'organization_type',
+        'first_name', 'last_name', 'organization', 'organization_type', 'organization_id',
         'job_title', 'department', 'country', 'city', 'timezone',
-        'preferred_channel', 'preferred_language', 'notes', 'is_active'
+        'preferred_channel', 'preferred_language',
+        'context', 'relationship_type', 'relationship_strength', 'last_interaction_date',
+        'notes', 'is_active'
     }
     updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
-    
+
     if not updates:
         return contact_get(id=id)
-    
+
     # Validate enums
     if 'organization_type' in updates and updates['organization_type'] not in ORGANIZATION_TYPES:
         raise ValueError(f"Invalid organization_type. Must be one of: {ORGANIZATION_TYPES}")
     if 'preferred_channel' in updates and updates['preferred_channel'] not in PREFERRED_CHANNELS:
         raise ValueError(f"Invalid preferred_channel. Must be one of: {PREFERRED_CHANNELS}")
-    
+    if 'relationship_type' in updates and updates['relationship_type'] not in RELATIONSHIP_TYPES:
+        raise ValueError(f"Invalid relationship_type. Must be one of: {RELATIONSHIP_TYPES}")
+    if 'relationship_strength' in updates and updates['relationship_strength'] not in RELATIONSHIP_STRENGTHS:
+        raise ValueError(f"Invalid relationship_strength. Must be one of: {RELATIONSHIP_STRENGTHS}")
+
     set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
     values = list(updates.values()) + [id]
-    
+
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(

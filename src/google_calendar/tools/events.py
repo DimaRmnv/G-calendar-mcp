@@ -64,6 +64,11 @@ def events(
     """
     Unified tool for all calendar event operations.
 
+    IMPORTANT - TIMEZONE:
+    Before creating or updating events, request the user's current timezone
+    to ensure events are created in the correct timezone. Use timezone parameter
+    with IANA format (e.g., 'Europe/Kyiv', 'Asia/Bishkek').
+
     IMPORTANT - ACCOUNT SELECTION:
     When user mentions "личный календарь", "personal", "рабочий", "work", etc.:
     1. FIRST call calendars(action="list_accounts") to see available accounts
