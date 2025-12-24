@@ -70,6 +70,15 @@ CREATE INDEX IF NOT EXISTS idx_projects_code ON projects(code);
 CREATE INDEX IF NOT EXISTS idx_projects_active ON projects(is_active);
 CREATE INDEX IF NOT EXISTS idx_projects_country ON projects(country);
 
+-- Migration: Drop deprecated position column
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_name = 'projects' AND column_name = 'position') THEN
+        ALTER TABLE projects DROP COLUMN position;
+    END IF;
+END $$;
+
 -- =============================================================================
 -- PROJECT-ORGANIZATION M:N Relationship
 -- =============================================================================
