@@ -6,7 +6,6 @@ Combines status (quick summary) and full reports with Excel export.
 
 from typing import Optional
 from datetime import datetime, timedelta
-from pathlib import Path
 
 from google_calendar.tools.projects.database import (
     ensure_database,
@@ -15,15 +14,6 @@ from google_calendar.tools.projects.database import (
 )
 from google_calendar.tools.projects.parser import parse_events_batch, TimeEntry
 from google_calendar.api.client import get_service
-
-
-REPORTS_DIR = Path.home() / "Downloads" / "Timesheet reports"
-
-
-def _get_reports_dir() -> Path:
-    """Get reports directory, creating if needed."""
-    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    return REPORTS_DIR
 
 
 def _count_workdays(start_date, end_date) -> int:
@@ -182,8 +172,11 @@ def _get_error_records(entries: list[TimeEntry]) -> list[dict]:
     return records
 
 
-async def _generate_excel(entries: list[TimeEntry], period_type: str) -> tuple[Path, str]:
-    """Generate Excel timesheet report. Returns (file_path, file_name)."""
+async def _generate_excel(entries: list[TimeEntry], period_type: str) -> tuple[str, str, str]:
+    """Generate Excel timesheet report. Returns (base64_content, file_name, mime_type)."""
+    import base64
+    from io import BytesIO
+
     try:
         from openpyxl import Workbook
         from openpyxl.styles import Font, PatternFill
@@ -232,13 +225,16 @@ async def _generate_excel(entries: list[TimeEntry], period_type: str) -> tuple[P
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[chr(64 + i)].width = w
 
-    # Save
-    reports_dir = _get_reports_dir()
+    # Save to BytesIO and encode as base64
+    buffer = BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+
     file_name = f"{datetime.now().strftime('%Y-%m-%d')}_{period_type}_timesheet.xlsx"
-    file_path = reports_dir / file_name
-    wb.save(file_path)
-    
-    return file_path, file_name
+    base64_content = base64.b64encode(buffer.read()).decode('utf-8')
+    mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+    return base64_content, file_name, mime_type
 
 
 async def generate_report(
@@ -406,9 +402,14 @@ async def generate_report(
     
     error_records = _get_error_records(entries)
     
-    # Always generate Excel
+    # Always generate Excel as base64
     try:
-        file_path, file_name = await _generate_excel(entries, report_type)
+        base64_content, file_name, mime_type = await _generate_excel(entries, report_type)
+        excel_data = {
+            "file_name": file_name,
+            "mime_type": mime_type,
+            "base64": base64_content,
+        }
     except Exception as e:
         return {
             "summary": summary,
@@ -419,6 +420,6 @@ async def generate_report(
     return {
         "summary": summary,
         "error_records": error_records,
-        "file_path": str(file_path),
-        "file_name": file_name,
+        "excel": excel_data,
+        "_artifact_hint": "Create downloadable Excel file from excel.base64 with excel.file_name"
     }

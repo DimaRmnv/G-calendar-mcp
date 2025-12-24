@@ -9,7 +9,6 @@ Uses PostgreSQL via asyncpg.
 
 from datetime import datetime, timedelta
 from typing import Optional
-from pathlib import Path
 
 from google_calendar.db.connection import get_db
 
@@ -531,18 +530,27 @@ async def export_contacts_excel(
     # Freeze header row
     ws.freeze_panes = 'A2'
 
-    # Save file
-    if not output_path:
-        downloads = Path.home() / "Downloads"
-        output_path = downloads / f"contacts_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    # Save to BytesIO and encode as base64
+    import base64
+    from io import BytesIO
 
-    wb.save(output_path)
+    buffer = BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+
+    file_name = f"contacts_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    base64_content = base64.b64encode(buffer.read()).decode('utf-8')
 
     return {
-        'filepath': str(output_path),
         'contact_count': len(contacts),
         'filters_applied': filter_params,
-        'generated_at': datetime.now().isoformat()
+        'generated_at': datetime.now().isoformat(),
+        'excel': {
+            'file_name': file_name,
+            'mime_type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'base64': base64_content
+        },
+        '_artifact_hint': 'Create downloadable Excel file from excel.base64 with excel.file_name'
     }
 
 
@@ -638,16 +646,25 @@ async def export_project_team_excel(
     # Freeze header
     ws.freeze_panes = 'A4'
 
-    # Save
-    if not output_path:
-        downloads = Path.home() / "Downloads"
-        output_path = downloads / f"team_{project['code']}_{datetime.now().strftime('%Y%m%d')}.xlsx"
+    # Save to BytesIO and encode as base64
+    import base64
+    from io import BytesIO
 
-    wb.save(output_path)
+    buffer = BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+
+    file_name = f"team_{project['code']}_{datetime.now().strftime('%Y%m%d')}.xlsx"
+    base64_content = base64.b64encode(buffer.read()).decode('utf-8')
 
     return {
-        'filepath': str(output_path),
         'project': project,
         'member_count': len(members),
-        'generated_at': datetime.now().isoformat()
+        'generated_at': datetime.now().isoformat(),
+        'excel': {
+            'file_name': file_name,
+            'mime_type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'base64': base64_content
+        },
+        '_artifact_hint': 'Create downloadable Excel file from excel.base64 with excel.file_name'
     }
