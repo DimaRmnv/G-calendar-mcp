@@ -61,124 +61,46 @@ def events(
     # Batch operations
     operations: Optional[list[dict]] = None,
 ) -> dict:
-    """
-    Unified tool for all calendar event operations.
+    """Calendar event operations.
 
-    IMPORTANT - TIMEZONE:
-    Before creating or updating events, request the user's current timezone
-    to ensure events are created in the correct timezone. Use timezone parameter
-    with IANA format (e.g., 'Europe/Kyiv', 'Asia/Bishkek').
+    SKILL REQUIRED: Read calendar-manager skill before create/update operations.
 
-    IMPORTANT - ACCOUNT SELECTION:
-    When user mentions "личный календарь", "personal", "рабочий", "work", etc.:
-    1. FIRST call calendars(action="list_accounts") to see available accounts
-    2. Match user's description to account name (e.g., "личный" → "personal")
-    3. Pass account="personal" (or matched name) to this function
-    Do NOT use default account when user specifies a calendar name!
+    PREREQUISITES (in order):
+    1. Account: calendars(action="list_accounts") → match user intent → pass account=
+    2. Projects: projects(operations=[{"op": "project_list_active"}]) → get structure_level
+    3. Participants: contacts(operations=[{"op": "project_team", "project_id": X}]) for meetings
+       OR contacts(operations=[{"op": "contact_resolve", "identifier": "Name"}]) for individuals
+    4. Timezone: from user memory, or calendars(action="settings") if uncertain
 
-    PROJECT CONTEXT (for create/update):
-    If user's project context is unclear:
-    1. Call projects(operations=[{"op": "project_list_active"}]) to get active projects
-    2. Use project information to properly categorize the event
+    Actions:
+        list: Events in time range. Use period='today'|'tomorrow'|'week'|'month' OR time_min/time_max
+        create: New event. Requires summary, start, end. Format summary per calendar-manager skill.
+        get: Full event details. Requires event_id
+        update: Modify event. Requires event_id. Use scope='single'|'all' for recurring
+        delete: Remove event. Requires event_id
+        search: Full-text search. Requires query
+        batch: Multiple operations. Requires operations[]
 
-    Args:
-        action: Operation to perform:
-            - 'list': List events in time range
-            - 'create': Create new event
-            - 'get': Get full event details
-            - 'update': Update existing event
-            - 'delete': Delete event
-            - 'search': Full-text search
-            - 'batch': Multiple operations
+    ACCOUNT SELECTION:
+    When user mentions "личный/personal" or "рабочий/work":
+    1. calendars(action="list_accounts") → get available accounts
+    2. Match: "рабочий/work/project" → @bfconsulting.com domain; "личный/personal" → other
+    3. Pass account= to this call
 
-        COMMON PARAMETERS:
-        event_id: Event ID (required for get/update/delete)
-        calendar_id: Calendar ID ('primary' for main calendar)
-        account: Account name (uses default if not specified)
-        timezone: Timezone (IANA format, e.g., 'Europe/Kyiv')
-        send_updates: Notification setting: 'all', 'externalOnly', 'none'
-
-        LIST/SEARCH PARAMETERS:
-        time_min: Start time boundary ('2024-01-01T00:00:00')
-        time_max: End time boundary
-        period: Shorthand: 'today', 'tomorrow', 'yesterday', 'week', 'month'
-            (mutually exclusive with time_min/time_max)
-        query: Full-text search query (for list and search actions)
-        max_results: Maximum events to return (1-250)
-        private_extended_property: Filter by private properties (key=value)
-        shared_extended_property: Filter by shared properties (key=value)
-
-        CREATE/UPDATE PARAMETERS:
-        summary: Event title (required for create)
-        start: Start time '2025-01-01T10:00:00' or '2025-01-01' for all-day
-        end: End time (required for create)
-        description: Event description/notes
-        location: Event location
-        attendees: Replace all attendees with this list
-        add_attendees: Add these emails to existing attendees (update only)
-        remove_attendees: Remove these emails from attendees (update only)
-        add_meet_link: If True, add Google Meet link
-        reminders_minutes: Reminder times in minutes [10, 60]
-        recurrence: RRULE format ['RRULE:FREQ=WEEKLY;BYDAY=MO,WE']
-        color_id: Color ID (use calendars(action='colors') to see options)
-        visibility: 'public' or 'private'
-        transparency: 'opaque' (busy) or 'transparent' (free)
-        extended_properties: {"private": {...}, "shared": {...}}
-
-        UPDATE-SPECIFIC:
-        scope: For recurring events: 'single' or 'all'
-        destination_calendar_id: Move event to this calendar
-
-        BATCH PARAMETER:
-        operations: List of operations, each with:
-            - action: 'create', 'update', or 'delete'
-            - For create: summary, start, end, and optional fields
-            - For update: event_id and fields to update
-            - For delete: event_id
-
-    Returns:
-        For action='list':
-            - events: List of event summaries
-            - calendarName, timeZone, hasMore
-
-        For action='create':
-            - id, summary, htmlLink, start, end, meetLink, attendees, status
-
-        For action='get':
-            - Full event details including attendees, conferenceData, etc.
-
-        For action='update':
-            - id, summary, htmlLink, start, end, meetLink, attendees, status
-            - scope_applied, is_recurring, moved_to (if applicable)
-
-        For action='delete':
-            - deleted: True, event_id, scope_applied
-
-        For action='search':
-            - events: Matching events, query, total, hasMore
-
-        For action='batch':
-            - total, succeeded, failed, results
+    Key params:
+        account: Required when user specifies calendar
+        timezone: IANA format. Always specify for create/update
+        summary: Format per calendar-manager skill (PROJECT * [PHASE *] [TASK *] Description)
+        attendees: List of emails from contacts lookup
+        add_meet_link: True for Google Meet
+        recurrence: RRULE format ["RRULE:FREQ=WEEKLY;BYDAY=MO,WE"]
 
     Examples:
-        List today's events: action="list", period="today"
-        Create event: action="create", summary="Meeting", start="2025-01-15T10:00:00", end="2025-01-15T11:00:00"
-        Get event: action="get", event_id="abc123"
-        Update event: action="update", event_id="abc123", summary="New Title"
-        Delete event: action="delete", event_id="abc123"
-        Search: action="search", query="project review"
-        Batch: action="batch", operations=[{"action": "create", ...}, ...]
-
-    TEAMS MEETING LINK:
-    To add Teams meeting link to Google Calendar event:
-    1. Create Teams event with is_online_meeting=True
-    2. Get online_meeting_url from Teams response
-    3. Add to location or description parameter
-
-    RECURRENCE EXAMPLES:
-    - Daily for 5 days: ["RRULE:FREQ=DAILY;COUNT=5"]
-    - Every weekday: ["RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"]
-    - Monthly on 15th: ["RRULE:FREQ=MONTHLY;BYMONTHDAY=15"]
+        events(action="list", period="today", account="work")
+        events(action="create", summary="CAYIB * TJ-ESKHATA * 1.3 * Strategy workshop",
+               start="2025-01-15T10:00:00", end="2025-01-15T12:00:00",
+               timezone="Asia/Bangkok", account="work")
+        events(action="update", event_id="abc", summary="New Title", scope="all")
     """
     if action == "list":
         return _list_events(

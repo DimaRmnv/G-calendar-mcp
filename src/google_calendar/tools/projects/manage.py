@@ -207,104 +207,40 @@ def _init_database(force_reset: bool = False) -> dict:
 
 
 async def projects(operations: list[dict]) -> dict:
-    """
-    Projects and organizations management tool.
+    """Projects, phases, tasks, and organizations management.
 
-    Execute multiple operations in a single call for efficient setup.
-    All entities have integer 'id' for update/delete operations.
+    SKILL REQUIRED: Read projects-management skill for full operations.
+    Read calendar-manager skill for event formatting by project structure.
 
-    IMPORTANT: Use project_list_active when creating calendar events
-    to know available projects and their structure (phases/tasks).
+    CRITICAL FOR CALENDAR EVENTS:
+        project_list_active: Returns active projects with structure_level, phases, tasks
+            → structure_level determines event summary format:
+               Level 1: PROJECT * Description
+               Level 2: PROJECT * PHASE * Description
+               Level 3: PROJECT * PHASE * TASK * Description
+            → ALWAYS call before creating work-related calendar events
 
-    Schema v2 IMPORTANT:
-    - Tasks are linked to PHASES (not projects). Hierarchy: PROJECT → PHASE → TASK
-    - Organizations have M:N relationship with projects via roles
+        projects(operations=[{"op": "project_list_active"}])
 
-    Args:
-        operations: List of operations to execute. Each operation is a dict with:
-            - op: Operation name (see below)
-            - Additional parameters depending on operation
+    Batch operations via operations=[{op, ...params}].
 
-    Operations:
-        Projects (v2: extended fields):
-            - project_add: code, description, is_billable?, is_active?, position?, structure_level?,
-                          full_name?, country?, sector?, start_date?, end_date?, contract_value?, currency?, context?
-            - project_get: id or code
-            - project_list: billable_only?, active_only?
-            - project_list_active: Get active projects with phases and tasks.
-            - project_update: id, + any project field
-            - project_delete: id
-            - project_activate/project_deactivate: id
+    Hierarchy: PROJECT → PHASE → TASK (tasks link to phases, not projects)
 
-        Phases (require project_id):
-            - phase_add: project_id, code, description?
-            - phase_get: id or (project_id + code)
-            - phase_list: project_id?
-            - phase_update: id, code?, description?
-            - phase_delete: id
+    OPERATION GROUPS:
+        Projects: project_add, project_get, project_list, project_list_active, project_update,
+                  project_delete, project_activate, project_deactivate
+        Phases: phase_add, phase_get, phase_list, phase_update, phase_delete
+        Tasks: task_add, task_get, task_list, task_update, task_delete
+        Organizations: org_add, org_get, org_list, org_update, org_delete, org_search
+        Project-Org Links: project_org_add/get/list/update/delete, project_orgs, org_projects
+        Norms: norm_add, norm_get, norm_list, norm_delete
+        Reports: report_status, report_week, report_month, report_custom
+        System: init, config_get, config_set, config_list, exclusion_*
 
-        Tasks (v2: require phase_id, not project_id):
-            - task_add: phase_id, code, description?
-            - task_get: id or (phase_id + code)
-            - task_list: phase_id? or project_id? (lists all tasks for project via phases)
-            - task_update: id, code?, description?, phase_id? (to move task)
-            - task_delete: id
-
-        Organizations (v2):
-            - org_add: name, short_name?, name_local?, organization_type?, parent_org_id?, country?, city?,
-                       website?, context?, relationship_status?, first_contact_date?, notes?
-            - org_get: id or name
-            - org_list: organization_type?, country?, relationship_status?, active_only?
-            - org_update: id, + any org field
-            - org_delete: id
-            - org_search: query, limit?
-
-        Project-Organization Links (v2):
-            - project_org_add: project_id, organization_id, org_role, contract_value?, currency?, is_lead?,
-                              start_date?, end_date?, notes?
-            - project_org_get: id
-            - project_org_list: project_id?, organization_id?, org_role?
-            - project_org_update: id, org_role?, contract_value?, is_lead?, etc.
-            - project_org_delete: id
-            - project_orgs: project_id - Get all organizations for a project
-            - org_projects: organization_id - Get all projects for an organization
-
-        Norms:
-            - norm_add: year, month, hours (upserts)
-            - norm_get: id or (year + month)
-            - norm_list: year?
-            - norm_delete: id
-
-        Exclusions:
-            - exclusion_add: pattern
-            - exclusion_list
-            - exclusion_delete: id
-
-        Config:
-            - config_get: key
-            - config_set: key, value
-            - config_list
-
-        Reports:
-            - report_status: account? - Quick WTD/MTD summary
-            - report_week: account? - Week report with Excel export
-            - report_month: account? - Month report with Excel export
-            - report_custom: account?, start_date, end_date - Custom period report
-
-        Init:
-            - init: force_reset?
-
-    Returns:
-        Dict with results array and summary.
-
-    Example (v2):
-        projects(operations=[
-            {"op": "org_add", "name": "World Bank", "organization_type": "dfi", "country": "USA"},
-            {"op": "project_add", "code": "NEW", "description": "New Project", "is_billable": True, "country": "KG"},
-            {"op": "phase_add", "project_id": 1, "code": "P1", "description": "Phase 1"},
-            {"op": "task_add", "phase_id": 1, "code": "T1", "description": "Task 1"},
-            {"op": "project_org_add", "project_id": 1, "organization_id": 1, "org_role": "donor", "is_lead": True},
-        ])
+    Examples:
+        projects(operations=[{"op": "project_list_active"}])
+        projects(operations=[{"op": "project_get", "code": "CAYIB"}])
+        projects(operations=[{"op": "phase_list", "project_id": 1}])
     """
     ensure_database()
 

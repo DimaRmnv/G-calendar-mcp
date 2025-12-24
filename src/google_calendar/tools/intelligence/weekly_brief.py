@@ -18,40 +18,35 @@ def weekly_brief(
     timezone: Optional[str] = None,
     account: Optional[str] = None,
 ) -> dict:
-    """
-    Generate a weekly schedule brief with analysis.
+    """Weekly schedule analysis with statistics, highlights, and conflict detection.
 
-    IMPORTANT - ACCOUNT SELECTION:
-    When user mentions "личный календарь", "personal", "рабочий", "work", etc.:
-    1. FIRST call calendars(action="list_accounts") to see available accounts
-    2. Match user's description to account name (e.g., "личный" → "personal")
-    3. Pass account="personal" (or matched name) to this function
-    Do NOT use default account when user specifies a calendar name!
+    SKILL REQUIRED: Read calendar-manager skill for event interpretation.
 
-    Args:
-        start_date: Start of week (date: '2025-01-13'). Default: current week's Monday.
-        calendar_id: Calendar ID (use 'primary' for main calendar)
-        timezone: Timezone for display (IANA format). Uses calendar timezone if not specified.
-        account: Account name (uses default if not specified)
-    
+    WHEN TO USE vs events(action="list"):
+    - weekly_brief: Overview with statistics, busiest day, conflicts, highlights
+    - events(action="list"): Raw event list for specific queries or modifications
+
+    ACCOUNT SELECTION:
+    When user specifies "рабочий/личный" calendar:
+    1. calendars(action="list_accounts")
+    2. Pass account= to this call
+
+    Params:
+        start_date: Week start YYYY-MM-DD. Default: current Monday
+        calendar_id: 'primary' for main calendar
+        timezone: IANA format. Default: calendar's timezone
+        account: Required when user specifies calendar
+
     Returns:
-        Dictionary with:
-        - week_start: Start of week
-        - week_end: End of week
-        - timezone: Timezone used
-        - summary: High-level statistics
-            - total_events: Total number of events
-            - total_hours: Total scheduled hours
-            - busiest_day: Day with most events
-            - free_days: Days with no events
-        - by_day: Events grouped by day with daily stats
-        - highlights: Key events (all-day, many attendees, external meetings)
-        - conflicts: Overlapping events detected
-    
-    Use this tool for:
-    - Morning planning ("What's my week look like?")
-    - Workload assessment
-    - Finding patterns in scheduling
+        summary: total_events, total_hours, busiest_day, free_days
+        by_day: Events grouped by weekday
+        highlights: All-day events, 4+ attendee meetings
+        conflicts: Overlapping events
+
+    Examples:
+        weekly_brief()
+        weekly_brief(account="work")
+        weekly_brief(start_date="2025-01-20", account="personal")
     """
     # Get timezone
     if not timezone:

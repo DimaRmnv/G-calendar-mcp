@@ -24,94 +24,39 @@ def attendees(
     send_updates: str = "all",
     account: Optional[str] = None,
 ) -> dict:
-    """
-    Manage event attendees or respond to invitations.
+    """Manage event attendees or respond to meeting invitations.
 
-    IMPORTANT - ACCOUNT SELECTION:
-    When user mentions "личный календарь", "personal", "рабочий", "work", etc.:
-    1. FIRST call calendars(action="list_accounts") to see available accounts
-    2. Match user's description to account name (e.g., "личный" → "personal")
-    3. Pass account="personal" (or matched name) to this function
-    Do NOT use default account when user specifies a calendar name!
+    SKILL REQUIRED: Read calendar-manager skill for participant formatting.
 
-    Args:
-        action: One of:
-            ORGANIZER ACTIONS (for events you organize):
-            - 'list': List current attendees with RSVP status
-            - 'add': Add new attendees (requires emails)
-            - 'remove': Remove attendees (requires emails)
-            - 'resend': Resend invitation to specified attendees (requires emails)
+    PREREQUISITE: To add attendees by name, first resolve via contacts tool:
+        contacts(operations=[{"op": "contact_resolve", "identifier": "Name"}]) → get email
+        OR contacts(operations=[{"op": "project_team", "project_id": X}]) → get all team emails
 
-            ATTENDEE ACTION (for events you're invited to):
-            - 'respond': Respond to an invitation (requires response)
+    ACCOUNT SELECTION:
+    Pass account= if event is in non-default calendar.
 
-        event_id: Event ID to modify/respond to
-        calendar_id: Calendar ID (use 'primary' for main calendar)
+    Actions (all require event_id):
+        ORGANIZER (you created the event):
+        - list: Current attendees with RSVP status
+        - add: Add attendees. Requires emails[]
+        - remove: Remove attendees. Requires emails[]
+        - resend: Resend invitation. Requires emails[]
 
-        ORGANIZER PARAMETERS:
-        emails: List of email addresses (required for add/remove/resend)
+        ATTENDEE (you're invited):
+        - respond: Accept/decline/tentative. Requires response
 
-        RESPOND PARAMETERS:
-        response: Your response - one of:
-            - 'accepted': Accept the invitation
-            - 'declined': Decline the invitation
-            - 'tentative': Tentatively accept
-        comment: Optional comment visible to the organizer
+    Key params:
+        emails: List of email addresses from contacts lookup
+        response: 'accepted' | 'declined' | 'tentative'
+        comment: Optional note to organizer
+        send_updates: 'all' (default) | 'externalOnly' | 'none'
+        account: Required if event in non-default calendar
 
-        COMMON PARAMETERS:
-        send_updates: Notification setting:
-            - 'all': Notify all attendees (default)
-            - 'externalOnly': Notify only non-Google Calendar users
-            - 'none': No notifications
-        account: Account name (uses default if not specified)
-
-    Returns:
-        For action='list':
-            - attendees: List with email, displayName, responseStatus, organizer, optional, comment
-            - total: Total attendee count
-            - by_status: Count by response status
-            - event_id: Event ID
-
-        For action='add':
-            - added: Count of added attendees
-            - emails_requested: Requested emails
-            - total: Total attendee count
-
-        For action='remove':
-            - removed: Count of removed attendees
-            - emails_requested: Requested emails
-            - total: Total attendee count
-
-        For action='resend':
-            - resent: Count of resent invitations
-            - emails_requested: Requested emails
-            - emails_found: Actually resent emails
-
-        For action='respond':
-            - event_id: Event ID
-            - response: Your response status
-            - event_summary: Event title
-            - organizer: Organizer email
-            - comment: Your comment (if provided)
-
-    Response status values:
-        - needsAction: Has not responded
-        - accepted: Accepted invitation
-        - declined: Declined invitation
-        - tentative: Tentatively accepted
+    Note: For recurring events, affects specific instance only.
 
     Examples:
-        List attendees: action="list", event_id="abc123"
-        Add attendee: action="add", event_id="abc123", emails=["john@example.com"]
-        Remove attendee: action="remove", event_id="abc123", emails=["john@example.com"]
-        Resend invite: action="resend", event_id="abc123", emails=["john@example.com"]
-        Accept invite: action="respond", event_id="abc123", response="accepted"
-        Decline with note: action="respond", event_id="abc123", response="declined", comment="I have a conflict"
-
-    Note:
-    - For list/add/remove/resend: You must be the event organizer
-    - For respond: You must be an attendee of the event
-    - For recurring events, this affects the specific instance
+        attendees(action="add", event_id="abc", emails=["a.azimbaev@aiylbank.kg"], account="work")
+        attendees(action="respond", event_id="abc", response="accepted")
     """
     if action == "list":
         return _list_attendees(event_id, calendar_id, account)

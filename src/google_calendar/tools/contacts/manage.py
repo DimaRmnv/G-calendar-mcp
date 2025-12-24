@@ -199,104 +199,39 @@ OPERATIONS = {
 
 
 async def contacts(operations: list[dict]) -> dict:
-    """
-    Unified contacts management tool.
+    """Unified contacts management.
 
-    Schema v2 changes:
-    - organization_id: FK to organizations table (use with projects org_add)
-    - context: Relationship context/notes
-    - relationship_type: professional, personal, referral
-    - relationship_strength: weak, moderate, strong
-    - last_interaction_date: YYYY-MM-DD format
+    SKILL REQUIRED: Read contacts-management skill for database operations.
+    For sending messages, read mcp-orchestration skill for channel routing.
 
-    Args:
-        operations: List of operations. Each dict has 'op' + params.
+    KEY OPERATIONS FOR CALENDAR/COMMUNICATION:
 
-    Operations:
-        Contacts:
-            contact_add: first_name, last_name, organization?, organization_type?,
-                        organization_id? (v2: FK to organizations), job_title?, country?,
-                        preferred_channel?, context?, relationship_type?, relationship_strength?,
-                        last_interaction_date?, notes?
-            contact_get: id OR email OR telegram OR phone
-            contact_list: organization?, country?, project_id?, active_only?
-            contact_update: id + fields to update (supports all v2 fields)
-            contact_delete: id
-            contact_search: query, limit?, threshold? (fuzzy matching score 0-100, default 60)
+        project_team: Get all contacts for a project with roles and emails
+            → Use for meeting attendees, team notifications
+            contacts(operations=[{"op": "project_team", "project_id": 5}])
 
-        Channels:
-            channel_add: contact_id, channel_type, channel_value, is_primary?
-            channel_list: contact_id
-            channel_update: id + fields
-            channel_delete: id
-            channel_set_primary: id
+        contact_resolve: Find contact by partial name
+            → Returns email, preferred_channel, organization
+            contacts(operations=[{"op": "contact_resolve", "identifier": "Altynbek"}])
 
-        Assignments:
-            assignment_add: contact_id, project_id, role_code, start_date?, workdays_allocated?
-            assignment_list: contact_id?, project_id?, role_code?
-            assignment_update: id + fields
-            assignment_delete: id
+        contact_resolve_multiple: Batch resolve
+            contacts(operations=[{"op": "contact_resolve_multiple", "identifiers": ["Michael", "Elena"]}])
 
-        Roles: role_list, role_get
-        Views: project_team, contact_projects
-        
-        Lookup (for mcp-orchestration):
-            contact_resolve: identifier, context? (project_id, organization, role_code)
-                → Returns full contact with channels and projects
-            contact_resolve_multiple: identifiers[], context?
-                → Batch resolve with deduplication
-            contact_preferred_channel: contact, channel_type?, for_purpose?
-                → Get best channel for contacting
-        
-        Enrichment:
-            suggest_enrichment: contact_id, sources? (telegram, teams, gmail)
-                → Returns instructions for Claude to call other MCP tools
-                   to enrich contact data (find chat IDs, phone from signatures)
-            suggest_new_contacts: sources?, limit?, period? (day/week/month/quarter/year)
-                → Returns instructions for Claude to scan communication channels
-                   and create new contacts from Telegram/Teams chats, Gmail, Calendar
-                → Period controls time depth: today, week, month (default), quarter, year
-                → Limit auto-scales with period for sources without date filtering
-            contact_brief: contact_id, days_back?, days_forward?
-                → Returns fetch instructions for all channels (Telegram, Teams, Gmail, Calendar)
-                → days_back: lookback period (default 7)
-                → days_forward: calendar lookahead (default 7)
-                → Claude executes instructions, aggregates into unified brief
-        
-        Reporting:
-            report: report_type, project_id?, organization?, days_stale?, limit?
-                Report types:
-                - summary: Overall contacts database summary
-                - project_team: Full team roster with contacts (requires project_id)
-                - organization: Contacts by organization (optional organization filter)
-                - communication_map: Contact channels summary
-                - stale_contacts: Contacts not updated in X days
-            export_contacts: filter_params?, output_path?
-                → Export contacts to Excel with all channels
-                → filter_params: {organization, organization_type, country, project_id}
-            export_project_team: project_id, output_path?
-                → Export project team roster to Excel
-        
-        System: init, status
+    Batch operations via operations=[{op, ...params}].
 
-    Valid values:
-        organization_type: donor, client, partner, bfc, government, bank, mfi, other
-        preferred_channel: email, telegram, teams, phone, whatsapp
-        channel_type: email, phone, telegram_id, telegram_username, telegram_chat_id,
-                     teams_id, teams_chat_id, whatsapp, linkedin, skype, google_calendar
-        role_category: consultant, client, donor, partner
-        relationship_type (v2): professional, personal, referral
-        relationship_strength (v2): weak, moderate, strong
+    OPERATION GROUPS:
+        Contacts: contact_add, contact_get, contact_list, contact_update, contact_delete, contact_search
+        Channels: channel_add, channel_list, channel_update, channel_delete, channel_set_primary
+        Assignments: assignment_add, assignment_list, assignment_update, assignment_delete
+        Lookup: contact_resolve, contact_resolve_multiple, contact_preferred_channel, project_team
+        Enrichment: suggest_enrichment, suggest_new_contacts, contact_brief
+        Reporting: report, export_contacts, export_project_team
+        System: init, status, role_list, role_get
 
-    Example:
-        contacts(operations=[
-            {"op": "init"},
-            {"op": "contact_add", "first_name": "Altynbek", "last_name": "Sydykov",
-             "organization": "Aiyl Bank", "country": "Kyrgyzstan"},
-            {"op": "channel_add", "contact_id": 1, "channel_type": "email",
-             "channel_value": "a.sydykov@aiylbank.kg", "is_primary": True},
-            {"op": "assignment_add", "contact_id": 1, "project_id": 5, "role_code": "CPM"}
-        ])
+    Examples:
+        contacts(operations=[{"op": "project_team", "project_id": 5}])
+        contacts(operations=[{"op": "contact_resolve", "identifier": "Altynbek"}])
+        contacts(operations=[{"op": "contact_add", "first_name": "John", "last_name": "Doe", "organization": "ADB"}])
     """
     first_op = operations[0].get("op") if operations else None
     if first_op not in ("init", "status"):

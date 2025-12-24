@@ -27,82 +27,34 @@ def availability(
     max_slots: int = 10,
     account: Optional[str] = None,
 ) -> dict:
-    """
-    Check calendar availability and find meeting slots.
+    """Check calendar availability and find meeting slots across timezones.
 
-    IMPORTANT - ACCOUNT SELECTION:
-    When user mentions "личный календарь", "personal", "рабочий", "work", etc.:
-    1. FIRST call calendars(action="list_accounts") to see available accounts
-    2. Match user's description to account name (e.g., "личный" → "personal")
-    3. Pass account="personal" (or matched name) to this function
-    Do NOT use default account when user specifies a calendar name!
+    SKILL REQUIRED: Read calendar-manager skill for scheduling workflows.
 
-    Args:
-        action: Action to perform:
-            - 'query': Check free/busy status (returns busy time blocks)
-            - 'find_slots': Find available meeting slots with timezone support
+    ACCOUNT SELECTION:
+    When checking specific calendar, first call calendars(action="list_accounts").
 
-        COMMON PARAMETERS:
-        time_min: Start of time range (required for both actions)
-            - For query: '2024-01-01T00:00:00' or with timezone '2024-01-01T00:00:00Z'
-            - For find_slots: date '2025-01-15' or datetime '2025-01-15T00:00:00'
-        time_max: End of time range (required for both actions)
-        calendars: List of calendar IDs to check. Defaults to ['primary']
-        timezone: Timezone for the query (IANA format, e.g., 'Asia/Bangkok')
-        account: Account name (uses default if not specified)
+    Actions:
+        query: Free/busy status. Returns busy blocks only — gaps are free time.
+        find_slots: Available meeting slots respecting working hours across timezones.
 
-        FIND_SLOTS SPECIFIC:
-        duration_minutes: Required meeting duration (required for find_slots)
-        working_hours_start: Start of working hours (0-23, default 9)
-        working_hours_end: End of working hours (0-23, default 18)
-        participant_timezones: List of participant timezones.
-            Slots will be within working hours for ALL timezones.
-        max_slots: Maximum number of slots to return (default 10)
+    Required: time_min, time_max (ISO datetime or date)
 
-    Returns:
-        For action='query':
-            - timeMin: Start of queried range
-            - timeMax: End of queried range
-            - calendars: Dict mapping calendar ID to:
-                - busy: List of {start, end} busy time blocks
-                - errors: Any errors accessing this calendar
-            Note: Only returns busy times; empty periods are free.
+    Params for query:
+        calendars: List of calendar IDs. Default ['primary']
+        timezone: IANA format for results
+        account: Required when user specifies calendar
 
-        For action='find_slots':
-            - slots: List of available slots with:
-                - start: Start time (ISO 8601 in primary timezone)
-                - end: End time (ISO 8601 in primary timezone)
-                - start_times: Dict of start times in each participant timezone
-            - timezone: Primary timezone used
-            - duration_minutes: Requested duration
-            - working_hours: Working hours constraint used
-            - participant_timezones: Timezones considered
-            - total_found: Number of slots found
+    Params for find_slots:
+        duration_minutes: Required meeting length (required)
+        working_hours_start/end: 0-23, default 9-18
+        participant_timezones: List of IANA timezones. Slots valid for ALL listed.
+        max_slots: Default 10
 
     Examples:
-        Check availability:
-        ```
-        availability(
-            action="query",
-            time_min="2025-01-15T00:00:00",
-            time_max="2025-01-15T23:59:59"
-        )
-        ```
-
-        Find 1-hour slots for a meeting with someone in London:
-        ```
-        availability(
-            action="find_slots",
-            time_min="2025-01-15",
-            time_max="2025-01-17",
-            duration_minutes=60,
-            timezone="Asia/Bangkok",
-            participant_timezones=["Europe/London"],
-            working_hours_start=9,
-            working_hours_end=17
-        )
-        ```
-        This finds slots that are within 9:00-17:00 in BOTH Bangkok and London.
+        availability(action="query", time_min="2025-01-15T00:00:00", time_max="2025-01-15T23:59:59", account="work")
+        availability(action="find_slots", time_min="2025-01-15", time_max="2025-01-17",
+                     duration_minutes=60, participant_timezones=["Europe/London", "Asia/Bishkek"])
     """
     if action == "query":
         return _query_freebusy(

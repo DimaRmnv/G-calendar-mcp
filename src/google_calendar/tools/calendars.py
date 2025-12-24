@@ -33,93 +33,42 @@ def calendars(
     include_acl: bool = False,
     account: Optional[str] = None,
 ) -> dict:
-    """
-    Unified tool for calendar management, colors, and account settings.
+    """Calendar management, colors, settings, and account discovery.
 
-    IMPORTANT - ACCOUNT SELECTION:
-    When user mentions "личный календарь", "personal", "рабочий", "work", etc.:
-    1. FIRST call calendars(action="list_accounts") to see available accounts
-    2. Match user's description to account name (e.g., "личный" → "personal")
-    3. Pass account="personal" (or matched name) to subsequent calls
-    Do NOT use default account when user specifies a calendar name!
+    SKILL REQUIRED: Read calendar-manager skill for event creation workflows.
 
-    Args:
-        action: Action to perform:
+    Actions:
+        ACCOUNTS (call first when user specifies calendar):
+        - list_accounts: All configured accounts with emails. Returns [{name, email, is_default}]
 
-            CALENDAR MANAGEMENT:
-            - 'list': List all accessible calendars (default)
-            - 'get': Get detailed info about a specific calendar
-            - 'create': Create a new secondary calendar
-            - 'update': Update calendar properties
-            - 'delete': Delete a secondary calendar (cannot delete primary)
+        CALENDARS:
+        - list: All accessible calendars (default)
+        - get: Calendar details. Requires calendar_id
+        - create: New secondary calendar. Requires summary
+        - update: Modify calendar. Requires calendar_id
+        - delete: Remove secondary calendar. Cannot delete primary.
 
-            COLORS:
-            - 'colors': List available colors for calendars and events
+        SETTINGS:
+        - settings: User's calendar settings including timezone
+        - set_timezone: Update timezone. Requires timezone (IANA format)
+        - colors: Available color IDs (1-11 for events)
 
-            SETTINGS:
-            - 'settings': Get user's calendar settings
-            - 'set_timezone': Update timezone (requires timezone parameter)
-            - 'list_accounts': List all configured accounts with emails
+    ACCOUNT WORKFLOW:
+    When user mentions "личный календарь", "personal", "рабочий", "work":
+    1. calendars(action="list_accounts")
+    2. Match user description to account name or email domain
+    3. Pass account= to all subsequent calendar tool calls
 
-        calendar_id: Calendar ID (required for get/update/delete, use 'primary' for main)
-        summary: Calendar name (required for create, optional for update)
-        description: Calendar description (for create/update)
-        timezone: IANA timezone, e.g., 'Europe/Kyiv' (for create/update/set_timezone)
-        location: Geographic location (for create/update)
-        include_acl: If True, include access control list in 'get' response
-        account: Account name (uses default if not specified)
-
-    Returns:
-        For action='list':
-            - calendars: List of calendars with id, summary, description, primary, accessRole
-            - total: Number of calendars
-
-        For action='get':
-            - id, summary, description, timeZone, location, conferenceProperties
-            - acl: Access control list (if include_acl=True)
-
-        For action='create':
-            - id: New calendar ID
-            - summary, timeZone
-            - created: True
-
-        For action='update':
-            - id, summary, timeZone
-            - updated: True
-
-        For action='delete':
-            - calendar_id: Deleted calendar ID
-            - deleted: True
-
-        For action='colors':
-            - event: Dict of event color IDs (1-11) to {background, foreground}
-            - calendar: Dict of calendar color IDs to color info
-
-            Standard event colors:
-            1: Lavender, 2: Sage, 3: Grape, 4: Flamingo, 5: Banana,
-            6: Tangerine, 7: Peacock, 8: Graphite, 9: Blueberry, 10: Basil, 11: Tomato
-
-        For action='settings':
-            - timezone, locale, weekStart, dateFieldOrder, timeFormat, showDeclinedEvents
-
-        For action='set_timezone':
-            - timezone: New timezone value
-            - updated: True
-
-        For action='list_accounts':
-            - accounts: List of {name, email, is_default}
-            - default_account: Name of default account
+    Key params:
+        calendar_id: 'primary' for main calendar, or specific ID
+        summary: Calendar name (for create)
+        timezone: IANA format (for create/update/set_timezone)
+        account: Account name from list_accounts
 
     Examples:
-        List calendars: action="list"
-        Get calendar: action="get", calendar_id="primary"
-        Create calendar: action="create", summary="Work Projects", timezone="Europe/Kyiv"
-        Update calendar: action="update", calendar_id="abc123", summary="New Name"
-        Delete calendar: action="delete", calendar_id="abc123"
-        Get colors: action="colors"
-        Get settings: action="settings"
-        Set timezone: action="set_timezone", timezone="Europe/Kyiv"
-        List accounts: action="list_accounts"
+        calendars(action="list_accounts")
+        calendars(action="settings", account="work")
+        calendars(action="set_timezone", timezone="Asia/Bangkok")
     """
     # Calendar management actions
     if action == "list":
