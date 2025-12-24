@@ -84,9 +84,12 @@ async def _execute_operation(op: str, p: dict) -> dict:
         )
         return {"contacts": contacts}
     elif op == "contact_update":
-        return await contact_update(p["id"], **{k: v for k, v in p.items() if k != "id"})
+        contact_id = p.get("id") or p.get("contact_id")
+        updates = {k: v for k, v in p.items() if k not in ("id", "contact_id", "op")}
+        return await contact_update(contact_id, **updates)
     elif op == "contact_delete":
-        deleted = await contact_delete(id=p["id"])
+        contact_id = p.get("id") or p.get("contact_id")
+        deleted = await contact_delete(id=contact_id)
         return {"deleted": deleted}
     elif op == "contact_search":
         contacts = await contact_search(

@@ -19,8 +19,8 @@ from google_calendar.api.client import get_service
 from google_calendar.db.connection import get_db
 
 
-# Base URL for download links (HTTP - no SSL on direct port)
-EXPORT_BASE_URL = "http://157.173.109.132:8005"
+# Base URL for download links (via Caddy reverse proxy with SSL)
+EXPORT_BASE_URL = "https://mcp-serv.duckdns.org"
 
 
 def _count_workdays(start_date, end_date) -> int:
