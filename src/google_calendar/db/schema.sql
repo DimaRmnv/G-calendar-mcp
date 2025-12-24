@@ -136,6 +136,32 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE INDEX IF NOT EXISTS idx_tasks_phase ON tasks(phase_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
 
+-- Migration: Add project_id to existing tasks table and make phase_id nullable
+DO $$
+BEGIN
+    -- Add project_id column if not exists
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_name = 'tasks' AND column_name = 'project_id') THEN
+        ALTER TABLE tasks ADD COLUMN project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE;
+        CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
+    END IF;
+
+    -- Make phase_id nullable if it's NOT NULL
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_name = 'tasks' AND column_name = 'phase_id' AND is_nullable = 'NO') THEN
+        ALTER TABLE tasks ALTER COLUMN phase_id DROP NOT NULL;
+    END IF;
+
+    -- Add check constraint if not exists
+    IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints
+                   WHERE table_name = 'tasks' AND constraint_name = 'tasks_parent_check') THEN
+        ALTER TABLE tasks ADD CONSTRAINT tasks_parent_check CHECK (
+            (phase_id IS NOT NULL AND project_id IS NULL) OR
+            (phase_id IS NULL AND project_id IS NOT NULL)
+        );
+    END IF;
+END $$;
+
 -- =============================================================================
 -- NORMS, EXCLUSIONS, SETTINGS
 -- =============================================================================

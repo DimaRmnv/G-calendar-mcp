@@ -90,25 +90,41 @@ async def project_get(id: Optional[int] = None, code: Optional[str] = None) -> O
 
 
 async def project_list(billable_only: bool = False, active_only: bool = False) -> list[dict]:
-    """List all projects."""
+    """List all projects with owner's role (contact_id=1).
+
+    Each project includes:
+        - my_role: role_code if owner is assigned to project (e.g. 'TL', 'KE')
+        - my_role_name: role name in English (e.g. 'Team Leader', 'Key Expert')
+    """
     async with get_db() as conn:
         conditions = []
         params = []
         param_idx = 1
 
         if billable_only:
-            conditions.append(f"is_billable = ${param_idx}")
+            conditions.append(f"p.is_billable = ${param_idx}")
             params.append(True)
             param_idx += 1
         if active_only:
-            conditions.append(f"is_active = ${param_idx}")
+            conditions.append(f"p.is_active = ${param_idx}")
             params.append(True)
             param_idx += 1
 
-        query = "SELECT * FROM projects"
+        where_clause = ""
         if conditions:
-            query += " WHERE " + " AND ".join(conditions)
-        query += " ORDER BY code"
+            where_clause = " WHERE " + " AND ".join(conditions)
+
+        # Join with contact_projects to get owner's role (contact_id=1)
+        query = f"""
+            SELECT p.*,
+                   cp.role_code as my_role,
+                   pr.role_name_en as my_role_name
+            FROM projects p
+            LEFT JOIN contact_projects cp ON cp.project_id = p.id AND cp.contact_id = 1 AND cp.is_active = TRUE
+            LEFT JOIN project_roles pr ON pr.role_code = cp.role_code
+            {where_clause}
+            ORDER BY p.code
+        """
 
         rows = await conn.fetch(query, *params)
         return [dict(row) for row in rows]
