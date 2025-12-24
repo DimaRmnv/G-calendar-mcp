@@ -321,6 +321,13 @@ async def _execute_operation(op: str, p: dict) -> dict:
 async def projects(operations: list[dict]) -> dict:
     """Projects, phases, tasks, and organizations management.
 
+    REPORTS - IMPORTANT FOR USER:
+        When user requests report (report_week, report_month, report_custom):
+        1. Response contains download_url - clickable link to Excel file
+        2. ALWAYS show this link to user: "Скачать отчёт: [download_url]"
+        3. Link expires in 1 hour
+        4. File format: Excel (.xlsx) for 1C import
+
     SKILL REQUIRED: Read projects-management skill for full operations.
     Read calendar-manager skill for event formatting by project structure.
 
@@ -360,7 +367,9 @@ async def projects(operations: list[dict]) -> dict:
         Roles: role_add, role_get, role_list, role_update, role_delete
         Norms: norm_add, norm_get, norm_list, norm_delete
         Reports: report_status, report_week, report_month, report_custom
-            → always returns download_url for Excel (TTL=1h)
+            → ALWAYS returns download_url for Excel file (TTL=1h)
+            → CRITICAL: Show download_url to user as clickable link!
+            → Response format: {download_url, filename, expires_in, summary}
         Export: cleanup_exports - delete expired files
         System: init, config_get, config_set, config_list, exclusion_*
 
