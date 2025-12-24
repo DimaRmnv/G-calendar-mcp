@@ -27,14 +27,16 @@ jobs:
             --exclude '.git' \
             --exclude '.env' \
             --exclude 'credentials' \
+            --exclude 'client_secrets' \
             --exclude 'data' \
-            src Dockerfile pyproject.toml README.md docker-compose.yml \
+            src Dockerfile pyproject.toml README.md docker-compose.prod.yml \
             ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:~/apps/google-calendar-mcp/
 
       - name: Rebuild and restart
         run: |
           ssh -i ~/.ssh/deploy_key ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} '
             cd ~/apps/google-calendar-mcp
+            cp docker-compose.prod.yml docker-compose.yml
             docker compose build --quiet
             docker compose up -d
             echo "Deploy complete!"

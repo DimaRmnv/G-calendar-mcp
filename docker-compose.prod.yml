@@ -1,0 +1,51 @@
+services:
+  google-calendar-mcp:
+    build: .
+    image: google-calendar-mcp:latest
+    container_name: google-calendar-mcp
+    restart: unless-stopped
+    environment:
+      # Database (shared PostgreSQL for all MCP services)
+      - POSTGRES_HOST=shared-postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-travel}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=google_calendar_mcp
+
+      # Server configuration
+      - GCAL_MCP_TRANSPORT_MODE=http
+      - GCAL_MCP_HTTP_HOST=0.0.0.0
+      - GCAL_MCP_HTTP_PORT=8000
+      - GCAL_MCP_API_KEY=${GCAL_MCP_API_KEY}
+
+      # OAuth configuration
+      - GCAL_MCP_OAUTH_REDIRECT_URI=https://mcp-serv.duckdns.org/mcp/calendar/oauth/callback
+      - GCAL_MCP_SERVER_BASE_URL=https://mcp-serv.duckdns.org/mcp/calendar
+      - GCAL_MCP_OAUTH_CLIENT_ID=${GCAL_MCP_OAUTH_CLIENT_ID}
+      - GCAL_MCP_OAUTH_CLIENT_SECRET=${GCAL_MCP_OAUTH_CLIENT_SECRET}
+
+      # Data directories
+      - GCAL_MCP_DATA_DIR=/data
+      - GCAL_MCP_CREDENTIALS_DIR=/data/credentials
+
+      # Features (optional)
+      - GCAL_MCP_TIME_TRACKING_ENABLED=${GCAL_MCP_TIME_TRACKING_ENABLED:-true}
+      - GCAL_MCP_CONTACTS_ENABLED=${GCAL_MCP_CONTACTS_ENABLED:-true}
+    volumes:
+      - ./credentials:/data/credentials
+      - ./data:/data
+      - ./data/.mcp:/root/.mcp
+    ports:
+      - "127.0.0.1:8005:8000"
+    networks:
+      - mcp-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+networks:
+  mcp-network:
+    external: true
