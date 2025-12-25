@@ -35,6 +35,7 @@ ENV/
 .claude/
 .claude-flow/
 .hive-mind/
+.mcp.json
 
 # Credentials (IMPORTANT: never commit)
 credentials.json
