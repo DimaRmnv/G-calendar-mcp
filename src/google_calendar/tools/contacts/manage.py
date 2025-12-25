@@ -112,14 +112,19 @@ async def _execute_operation(op: str, p: dict) -> dict:
         channels = await channel_list(contact_id=p["contact_id"])
         return {"channels": channels}
     elif op == "channel_get":
-        return await channel_get(id=p["id"])
+        channel_id = p.get("id") or p.get("channel_id")
+        return await channel_get(id=channel_id)
     elif op == "channel_update":
-        return await channel_update(p["id"], **{k: v for k, v in p.items() if k != "id"})
+        channel_id = p.get("id") or p.get("channel_id")
+        updates = {k: v for k, v in p.items() if k not in ("id", "channel_id", "op")}
+        return await channel_update(channel_id, **updates)
     elif op == "channel_delete":
-        deleted = await channel_delete(id=p["id"])
+        channel_id = p.get("id") or p.get("channel_id")
+        deleted = await channel_delete(id=channel_id)
         return {"deleted": deleted}
     elif op == "channel_set_primary":
-        return await channel_set_primary(id=p["id"])
+        channel_id = p.get("id") or p.get("channel_id")
+        return await channel_set_primary(id=channel_id)
 
     # Assignments
     elif op == "assignment_add":
@@ -129,7 +134,8 @@ async def _execute_operation(op: str, p: dict) -> dict:
             workdays_allocated=p.get("workdays_allocated"), notes=p.get("notes")
         )
     elif op == "assignment_get":
-        return await assignment_get(id=p["id"])
+        assignment_id = p.get("id") or p.get("assignment_id")
+        return await assignment_get(id=assignment_id)
     elif op == "assignment_list":
         assignments = await assignment_list(
             contact_id=p.get("contact_id"), project_id=p.get("project_id"),
@@ -137,14 +143,19 @@ async def _execute_operation(op: str, p: dict) -> dict:
         )
         return {"assignments": assignments}
     elif op == "assignment_update":
-        return await assignment_update(p["id"], **{k: v for k, v in p.items() if k != "id"})
+        assignment_id = p.get("id") or p.get("assignment_id")
+        updates = {k: v for k, v in p.items() if k not in ("id", "assignment_id", "op")}
+        return await assignment_update(assignment_id, **updates)
     elif op == "assignment_delete":
-        deleted = await assignment_delete(id=p["id"])
+        assignment_id = p.get("id") or p.get("assignment_id")
+        deleted = await assignment_delete(id=assignment_id)
         return {"deleted": deleted}
     elif op == "assignment_activate":
-        return await assignment_update(id=p["id"], is_active=True)
+        assignment_id = p.get("id") or p.get("assignment_id")
+        return await assignment_update(id=assignment_id, is_active=True)
     elif op == "assignment_deactivate":
-        return await assignment_update(id=p["id"], is_active=False)
+        assignment_id = p.get("id") or p.get("assignment_id")
+        return await assignment_update(id=assignment_id, is_active=False)
 
     # Roles
     elif op == "role_list":
@@ -253,6 +264,23 @@ async def contacts(operations: list[dict]) -> dict:
 
     Batch operations via operations=[{op, ...params}].
 
+    CONTACT WORKFLOW:
+        When adding a new contact, ALWAYS ask:
+        1. Organization?
+           → First: projects(operations=[{"op": "org_search", "query": "WB"}]) to find org
+           → Or: projects(operations=[{"op": "org_add", "name": "World Bank"}]) to create
+           → Then use organization_id in contact_add
+        2. Project and role? (→ assignment_add with notes)
+        3. Email/phone? (→ channel_add)
+
+        Use batch for complete contact creation:
+        contacts(operations=[
+            {"op": "contact_add", "first_name": "John", "last_name": "Doe", "organization_id": 3},
+            {"op": "channel_add", "contact_id": -1, "channel_type": "email", "channel_value": "john@wb.org"},
+            {"op": "assignment_add", "contact_id": -1, "project_id": 5, "role_code": "DPM", "notes": "Primary contact for M&E"}
+        ])
+        Note: contact_id=-1 means "use ID from previous contact_add in same batch"
+
     OPERATION GROUPS:
         Contacts: contact_add, contact_get, contact_list, contact_update, contact_delete, contact_search
         Channels: channel_add, channel_list, channel_update, channel_delete, channel_set_primary
@@ -287,6 +315,7 @@ async def contacts(operations: list[dict]) -> dict:
     results = []
     success_count = 0
     error_count = 0
+    last_contact_id = None  # For contact_id=-1 in batch operations
 
     for i, op_data in enumerate(operations):
         op = op_data.get("op")
@@ -296,10 +325,22 @@ async def contacts(operations: list[dict]) -> dict:
             error_count += 1
             continue
 
+        # Replace contact_id=-1 with last created contact ID
+        if op_data.get("contact_id") == -1:
+            if last_contact_id is None:
+                results.append({"index": i, "op": op, "error": "contact_id=-1 but no contact_add before"})
+                error_count += 1
+                continue
+            op_data = {**op_data, "contact_id": last_contact_id}
+
         try:
             result = await _execute_operation(op, op_data)
             results.append({"index": i, "op": op, "result": result})
             success_count += 1
+
+            # Track last created contact for contact_id=-1
+            if op == "contact_add" and result.get("id"):
+                last_contact_id = result["id"]
         except ValueError as e:
             results.append({"index": i, "op": op, "error": str(e)})
             error_count += 1
