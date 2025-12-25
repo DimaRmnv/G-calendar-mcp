@@ -176,38 +176,57 @@ async def project_delete(id: int) -> bool:
 
 
 async def project_list_active() -> list[dict]:
-    """Get active projects with their phases and tasks.
+    """Get active projects with their phases and tasks (compact format for token efficiency).
 
     Returns projects with:
         - phases: list of phases, each with nested 'tasks' for phase-linked tasks
         - universal_tasks: tasks linked directly to project (phase_id=null)
         - format: event summary format based on structure_level
 
-    Task organization:
-        - Phase-linked tasks appear under their respective phase['tasks']
-        - Universal tasks (project_id set, phase_id null) appear in project['universal_tasks']
+    Excluded fields (for token economy):
+        - created_at, updated_at, start_date, end_date
+        - contract_value, currency, sector
+        - Phase/task timestamps and redundant IDs
     """
+    # Fields to exclude from response
+    exclude_project = {'created_at', 'updated_at', 'start_date', 'end_date',
+                       'contract_value', 'currency', 'sector'}
+    exclude_phase = {'created_at', 'updated_at', 'project_id'}
+    exclude_task = {'created_at', 'updated_at', 'project_id', 'phase_id', 'phase_code'}
+
     projects = await project_list(active_only=True)
+    result = []
     for project in projects:
         # Get phases with their tasks
         phases = await phase_list(project_id=project["id"])
+        compact_phases = []
         for phase in phases:
             phase_tasks = await task_list(phase_id=phase["id"])
-            phase["tasks"] = phase_tasks
-        project["phases"] = phases
+            compact_tasks = [{k: v for k, v in t.items() if k not in exclude_task} for t in phase_tasks]
+            compact_phase = {k: v for k, v in phase.items() if k not in exclude_phase}
+            compact_phase["tasks"] = compact_tasks
+            compact_phases.append(compact_phase)
 
         # Get universal tasks (linked to project, not to phase)
         all_tasks = await task_list(project_id=project["id"], include_universal=True)
-        project["universal_tasks"] = [t for t in all_tasks if t.get("phase_id") is None]
+        universal = [t for t in all_tasks if t.get("phase_id") is None]
+        compact_universal = [{k: v for k, v in t.items() if k not in exclude_task} for t in universal]
+
+        # Build compact project
+        compact_project = {k: v for k, v in project.items() if k not in exclude_project}
+        compact_project["phases"] = compact_phases
+        compact_project["universal_tasks"] = compact_universal
 
         # Format hint for calendar events
         if project["structure_level"] == 1:
-            project["format"] = "PROJECT * Description"
+            compact_project["format"] = "PROJECT * Description"
         elif project["structure_level"] == 2:
-            project["format"] = "PROJECT * PHASE * Description"
+            compact_project["format"] = "PROJECT * PHASE * Description"
         else:
-            project["format"] = "PROJECT * PHASE * TASK * Description"
-    return projects
+            compact_project["format"] = "PROJECT * PHASE * TASK * Description"
+
+        result.append(compact_project)
+    return result
 
 
 # =============================================================================
