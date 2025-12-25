@@ -61,7 +61,7 @@ async def _execute_operation(op: str, p: dict) -> dict:
         return await contact_add(
             first_name=p["first_name"], last_name=p["last_name"],
             organization=p.get("organization"), organization_type=p.get("organization_type"),
-            organization_id=p.get("organization_id"),
+            organization_id=p.get("organization_id"), org_notes=p.get("org_notes"),
             job_title=p.get("job_title"), department=p.get("department"),
             country=p.get("country"), city=p.get("city"), timezone=p.get("timezone"),
             preferred_channel=p.get("preferred_channel", "email"),

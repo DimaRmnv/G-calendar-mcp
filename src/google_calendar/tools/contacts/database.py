@@ -108,6 +108,7 @@ async def contact_add(
     organization: Optional[str] = None,
     organization_type: Optional[str] = None,
     organization_id: Optional[int] = None,
+    org_notes: Optional[str] = None,
     job_title: Optional[str] = None,
     department: Optional[str] = None,
     country: Optional[str] = None,
@@ -131,14 +132,14 @@ async def contact_add(
         row = await conn.fetchrow(
             """
             INSERT INTO contacts (
-                first_name, last_name, organization, organization_type, organization_id,
+                first_name, last_name, organization, organization_type, organization_id, org_notes,
                 job_title, department, country, city, timezone,
                 preferred_channel, preferred_language, context,
                 relationship_type, relationship_strength, last_interaction_date, notes
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
             RETURNING id
             """,
-            first_name, last_name, organization, organization_type, organization_id,
+            first_name, last_name, organization, organization_type, organization_id, org_notes,
             job_title, department, country, city, timezone,
             preferred_channel, preferred_language, context,
             relationship_type, relationship_strength, last_interaction_date, notes
@@ -247,7 +248,7 @@ async def contact_list(
 async def contact_update(id: int, **kwargs) -> Optional[dict]:
     """Update contact by id."""
     allowed_fields = {
-        'first_name', 'last_name', 'organization', 'organization_type', 'organization_id',
+        'first_name', 'last_name', 'organization', 'organization_type', 'organization_id', 'org_notes',
         'job_title', 'department', 'country', 'city', 'timezone',
         'preferred_channel', 'preferred_language', 'context',
         'relationship_type', 'relationship_strength', 'last_interaction_date',

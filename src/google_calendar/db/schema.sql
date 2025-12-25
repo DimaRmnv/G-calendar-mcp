@@ -88,8 +88,7 @@ CREATE TABLE IF NOT EXISTS project_organizations (
     id SERIAL PRIMARY KEY,
     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     organization_id INTEGER NOT NULL REFERENCES organizations(id),
-    org_role TEXT NOT NULL CHECK(org_role IN
-        ('donor', 'client', 'implementing_agency', 'partner', 'subcontractor', 'beneficiary')),
+    org_role TEXT NOT NULL,  -- Free text: donor, client, implementing_agency, partner, etc.
     contract_value DECIMAL(15,2),
     currency TEXT DEFAULT 'EUR',
     is_lead BOOLEAN DEFAULT FALSE,
@@ -250,6 +249,7 @@ CREATE TABLE IF NOT EXISTS contacts (
     organization_type TEXT CHECK(organization_type IN
         ('donor', 'dfi', 'bank', 'mfi', 'nbfi', 'government', 'regulator',
          'client', 'vendor', 'consulting', 'ngo', 'association', 'training_provider', 'partner', 'other')),
+    org_notes TEXT,  -- Contact's role/context within organization
     job_title TEXT,
     department TEXT,
     country TEXT,

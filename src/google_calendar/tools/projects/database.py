@@ -33,11 +33,8 @@ ORGANIZATION_TYPES = (
     'partner', 'other'
 )
 
-# Roles for project-organization relationships
-ORG_ROLES = (
-    'donor', 'client', 'implementing_agency',
-    'partner', 'subcontractor', 'beneficiary'
-)
+# Roles for project-organization relationships (free text, examples below)
+# Common roles: donor, client, implementing_agency, partner, subcontractor, beneficiary
 
 # Relationship statuses for organizations
 RELATIONSHIP_STATUSES = ('prospect', 'active', 'dormant', 'former')
@@ -830,10 +827,7 @@ async def project_org_add(
     end_date: Optional[str] = None,
     notes: Optional[str] = None,
 ) -> dict:
-    """Link an organization to a project with a specific role."""
-    if org_role not in ORG_ROLES:
-        raise ValueError(f"Invalid org_role. Must be one of: {ORG_ROLES}")
-
+    """Link an organization to a project with a specific role (free text)."""
     async with get_db() as conn:
         row = await conn.fetchrow(
             """
@@ -908,9 +902,6 @@ async def project_org_update(id: int, **kwargs) -> Optional[dict]:
 
     if not updates:
         return await project_org_get(id=id)
-
-    if "org_role" in updates and updates["org_role"] not in ORG_ROLES:
-        raise ValueError(f"Invalid org_role. Must be one of: {ORG_ROLES}")
 
     set_parts = []
     values = []
