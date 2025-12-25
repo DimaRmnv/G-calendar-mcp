@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS organizations (
     short_name TEXT,
     name_local TEXT,
     organization_type TEXT CHECK(organization_type IN
-        ('donor', 'client', 'partner', 'consultant', 'government', 'bank', 'mfi', 'nbfi', 'dfi', 'ngo', 'other')),
+        ('donor', 'dfi', 'bank', 'mfi', 'nbfi', 'government', 'regulator',
+         'client', 'vendor', 'consulting', 'ngo', 'association', 'training_provider', 'partner', 'other')),
     parent_org_id INTEGER REFERENCES organizations(id),
     country TEXT,
     city TEXT,
@@ -247,7 +248,8 @@ CREATE TABLE IF NOT EXISTS contacts (
     organization_id INTEGER REFERENCES organizations(id),
     organization TEXT,  -- Legacy text name
     organization_type TEXT CHECK(organization_type IN
-        ('donor', 'client', 'partner', 'consultant', 'government', 'bank', 'mfi', 'nbfi', 'dfi', 'ngo', 'other')),
+        ('donor', 'dfi', 'bank', 'mfi', 'nbfi', 'government', 'regulator',
+         'client', 'vendor', 'consulting', 'ngo', 'association', 'training_provider', 'partner', 'other')),
     job_title TEXT,
     department TEXT,
     country TEXT,
