@@ -190,7 +190,7 @@ async def project_list_active() -> list[dict]:
     """
     # Fields to exclude from response
     exclude_project = {'created_at', 'updated_at', 'start_date', 'end_date',
-                       'contract_value', 'currency', 'sector'}
+                       'contract_value', 'currency', 'sector', 'my_role'}
     exclude_phase = {'created_at', 'updated_at', 'project_id'}
     exclude_task = {'created_at', 'updated_at', 'project_id', 'phase_id', 'phase_code'}
 
