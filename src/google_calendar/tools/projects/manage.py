@@ -381,6 +381,17 @@ async def projects(operations: list[dict]) -> dict:
         role_update: {role_code, role_name_en?, role_name_ru?, role_category?, description?}
         role_delete: {role_code}
 
+    OPERATION FIELDS (* = required):
+        project_add: code*, description*, is_billable, is_active, structure_level, full_name,
+                     country, sector, start_date, end_date, contract_value, currency, context
+        phase_add: project_id*, code*, description
+        task_add: code*, description, phase_id OR project_id (one required)
+        org_add: name*, short_name, name_local, organization_type, parent_org_id,
+                 country, city, website, context, relationship_status, first_contact_date, notes
+        project_org_add: project_id*, organization_id*, org_role*, contract_value, currency,
+                         is_lead, start_date, end_date, notes
+        norm_add: year*, month*, hours*
+
     Examples:
         projects(operations=[{"op": "project_list_active"}])
         projects(operations=[{"op": "task_add", "phase_id": 1, "code": "T1"}])  # Phase-linked
