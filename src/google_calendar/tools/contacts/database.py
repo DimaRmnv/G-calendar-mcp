@@ -21,7 +21,10 @@ from google_calendar.db.connection import get_db, check_db_exists
 
 
 # Valid values for CHECK constraints
-ORGANIZATION_TYPES = ('donor', 'client', 'partner', 'bfc', 'government', 'bank', 'mfi', 'other')
+ORGANIZATION_TYPES = (
+    'donor', 'client', 'partner', 'consultant',
+    'government', 'bank', 'mfi', 'nbfi', 'dfi', 'ngo', 'other'
+)
 PREFERRED_CHANNELS = ('email', 'telegram', 'teams', 'phone', 'whatsapp')
 CHANNEL_TYPES = (
     'email', 'phone', 'telegram_id', 'telegram_username', 'telegram_chat_id',
