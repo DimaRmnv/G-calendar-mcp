@@ -262,6 +262,12 @@ async def contacts(operations: list[dict]) -> dict:
         Reporting: report, export_contacts, export_project_team
         System: init, status, role_list, role_get
 
+    OPERATION FIELDS (* = required):
+        contact_add: first_name*, last_name*, organization, organization_type, organization_id,
+                     job_title, department, country, city, timezone, preferred_channel, notes
+        channel_add: contact_id*, channel_type*, channel_value*, channel_label, is_primary, notes
+        assignment_add: contact_id*, project_id*, role_code*, start_date, end_date, workdays_allocated, notes
+
     Examples:
         contacts(operations=[{"op": "project_team", "project_id": 5}])
         contacts(operations=[{"op": "contact_resolve", "identifier": "Altynbek"}])
