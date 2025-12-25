@@ -2,15 +2,21 @@
 Contact reporting and analytics module.
 
 Provides reports on contacts, project teams, and communication patterns.
-Includes Excel export functionality.
+Includes Excel export functionality with download URLs.
 
 Uses PostgreSQL via asyncpg.
 """
 
-from datetime import datetime, timedelta
+import uuid as uuid_module
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional
 
 from google_calendar.db.connection import get_db
+
+
+# Base URL for download links
+EXPORT_BASE_URL = "http://157.173.109.132:8005"
 
 
 async def contacts_report(
@@ -530,27 +536,33 @@ async def export_contacts_excel(
     # Freeze header row
     ws.freeze_panes = 'A2'
 
-    # Save to BytesIO and encode as base64
-    import base64
-    from io import BytesIO
+    # Save to disk and create download link
+    file_uuid = uuid_module.uuid4().hex
+    filename = f"Contacts_Export_{datetime.now().strftime('%d%b%Y')}.xlsx"
+    file_path = Path("/data/reports") / f"{file_uuid}.xlsx"
+    file_path.parent.mkdir(parents=True, exist_ok=True)
 
-    buffer = BytesIO()
-    wb.save(buffer)
-    buffer.seek(0)
+    wb.save(file_path)
 
-    file_name = f"contacts_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-    base64_content = base64.b64encode(buffer.read()).decode('utf-8')
+    # Record in database (TTL = 1 hour)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+    async with get_db() as conn:
+        await conn.execute(
+            """
+            INSERT INTO export_files (uuid, filename, file_path, expires_at)
+            VALUES ($1, $2, $3, $4)
+            """,
+            file_uuid, filename, str(file_path), expires_at
+        )
+
+    download_url = f"{EXPORT_BASE_URL}/export/{file_uuid}"
 
     return {
         'contact_count': len(contacts),
         'filters_applied': filter_params,
-        'generated_at': datetime.now().isoformat(),
-        'excel': {
-            'file_name': file_name,
-            'mime_type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'base64': base64_content
-        },
-        '_artifact_hint': 'Create downloadable Excel file from excel.base64 with excel.file_name'
+        'download_url': download_url,
+        'expires_in': '1 hour',
+        'filename': filename
     }
 
 
@@ -646,25 +658,31 @@ async def export_project_team_excel(
     # Freeze header
     ws.freeze_panes = 'A4'
 
-    # Save to BytesIO and encode as base64
-    import base64
-    from io import BytesIO
+    # Save to disk and create download link
+    file_uuid = uuid_module.uuid4().hex
+    filename = f"Team_{project['code']}_{datetime.now().strftime('%d%b%Y')}.xlsx"
+    file_path = Path("/data/reports") / f"{file_uuid}.xlsx"
+    file_path.parent.mkdir(parents=True, exist_ok=True)
 
-    buffer = BytesIO()
-    wb.save(buffer)
-    buffer.seek(0)
+    wb.save(file_path)
 
-    file_name = f"team_{project['code']}_{datetime.now().strftime('%Y%m%d')}.xlsx"
-    base64_content = base64.b64encode(buffer.read()).decode('utf-8')
+    # Record in database (TTL = 1 hour)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+    async with get_db() as conn:
+        await conn.execute(
+            """
+            INSERT INTO export_files (uuid, filename, file_path, expires_at)
+            VALUES ($1, $2, $3, $4)
+            """,
+            file_uuid, filename, str(file_path), expires_at
+        )
+
+    download_url = f"{EXPORT_BASE_URL}/export/{file_uuid}"
 
     return {
         'project': project,
         'member_count': len(members),
-        'generated_at': datetime.now().isoformat(),
-        'excel': {
-            'file_name': file_name,
-            'mime_type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'base64': base64_content
-        },
-        '_artifact_hint': 'Create downloadable Excel file from excel.base64 with excel.file_name'
+        'download_url': download_url,
+        'expires_in': '1 hour',
+        'filename': filename
     }
