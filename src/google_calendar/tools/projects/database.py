@@ -19,8 +19,18 @@ SCHEMA_VERSION = 2
 
 # Organization types for organizations table
 ORGANIZATION_TYPES = (
-    'donor', 'dfi', 'government', 'bank', 'mfi', 'nbfi',
-    'consulting', 'ngo', 'other'
+    # Funding & Development
+    'donor', 'dfi',
+    # Financial Institutions
+    'bank', 'mfi', 'nbfi',
+    # Public Sector
+    'government', 'regulator',
+    # Private Sector
+    'client', 'vendor', 'consulting',
+    # Non-profit & Associations
+    'ngo', 'association', 'training_provider',
+    # Relationships
+    'partner', 'other'
 )
 
 # Roles for project-organization relationships
