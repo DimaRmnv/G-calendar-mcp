@@ -4,6 +4,7 @@ Report tool for time tracking.
 Combines status (quick summary) and full reports with Excel export.
 """
 
+import os
 import uuid
 from typing import Optional
 from datetime import datetime, timedelta, timezone
@@ -19,8 +20,8 @@ from google_calendar.api.client import get_service
 from google_calendar.db.connection import get_db
 
 
-# Base URL for download links (direct IP, HTTP - DuckDNS blocked by some ISPs)
-EXPORT_BASE_URL = "http://157.173.109.132:8005"
+# Base URL for download links (from env, fallback for local dev)
+EXPORT_BASE_URL = os.environ.get("EXPORT_BASE_URL", "http://localhost:8000")
 
 
 def _count_workdays(start_date, end_date) -> int:

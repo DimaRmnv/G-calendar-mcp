@@ -28,6 +28,9 @@ services:
       - GCAL_MCP_DATA_DIR=/data
       - GCAL_MCP_CREDENTIALS_DIR=/data/credentials
 
+      # Export URLs
+      - EXPORT_BASE_URL=${EXPORT_BASE_URL:-http://localhost:8000}
+
       # Features (optional)
       - GCAL_MCP_TIME_TRACKING_ENABLED=${GCAL_MCP_TIME_TRACKING_ENABLED:-true}
       - GCAL_MCP_CONTACTS_ENABLED=${GCAL_MCP_CONTACTS_ENABLED:-true}

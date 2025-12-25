@@ -7,6 +7,7 @@ Includes Excel export functionality with download URLs.
 Uses PostgreSQL via asyncpg.
 """
 
+import os
 import uuid as uuid_module
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -15,8 +16,8 @@ from typing import Optional
 from google_calendar.db.connection import get_db
 
 
-# Base URL for download links
-EXPORT_BASE_URL = "http://157.173.109.132:8005"
+# Base URL for download links (from env, fallback for local dev)
+EXPORT_BASE_URL = os.environ.get("EXPORT_BASE_URL", "http://localhost:8000")
 
 
 async def contacts_report(
