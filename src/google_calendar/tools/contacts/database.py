@@ -338,7 +338,14 @@ async def contact_update(id: int, **kwargs) -> Optional[dict]:
         'relationship_type', 'relationship_strength', 'last_interaction_date',
         'notes', 'is_active'
     }
-    updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
+    # Fields that can be explicitly set to NULL
+    nullable_fields = {
+        'organization_id', 'org_notes', 'department', 'city', 'timezone',
+        'context', 'relationship_type', 'relationship_strength',
+        'last_interaction_date', 'notes'
+    }
+    updates = {k: v for k, v in kwargs.items()
+               if k in allowed_fields and (v is not None or k in nullable_fields)}
 
     if 'preferred_channel' in updates and updates['preferred_channel'] not in PREFERRED_CHANNELS:
         raise ValueError(f"Invalid preferred_channel. Must be one of: {PREFERRED_CHANNELS}")
