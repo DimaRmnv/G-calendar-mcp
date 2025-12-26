@@ -266,7 +266,7 @@ async def _report_communication_map(limit: int = 50) -> dict:
 async def _report_stale_contacts(days_stale: int = 90, limit: int = 50) -> dict:
     """Contacts not updated recently."""
     async with get_db() as conn:
-        cutoff = (datetime.now() - timedelta(days=days_stale)).isoformat()
+        cutoff = datetime.now() - timedelta(days=days_stale)
 
         stale_raw = await conn.fetch("""
             SELECT
@@ -350,7 +350,7 @@ async def _report_summary() -> dict:
         )
 
         # Recent additions (last 30 days)
-        cutoff = (datetime.now() - timedelta(days=30)).isoformat()
+        cutoff = datetime.now() - timedelta(days=30)
         recent_additions = await conn.fetchval(
             "SELECT COUNT(*) FROM contacts WHERE created_at > $1", cutoff
         )
