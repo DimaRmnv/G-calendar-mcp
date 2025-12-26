@@ -337,13 +337,13 @@ CREATE TABLE IF NOT EXISTS contact_projects (
     id SERIAL PRIMARY KEY,
     contact_id INTEGER NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    role_code TEXT NOT NULL REFERENCES project_roles(role_code),
+    role_name VARCHAR(100) NOT NULL CHECK (TRIM(role_name) <> ''),
     start_date DATE,
     end_date DATE,
     is_active BOOLEAN DEFAULT TRUE,
     workdays_allocated INTEGER,
     notes TEXT,
-    UNIQUE(contact_id, project_id, role_code)
+    UNIQUE(contact_id, project_id, role_name)
 );
 
 CREATE INDEX IF NOT EXISTS idx_contact_projects_project ON contact_projects(project_id);
@@ -466,9 +466,7 @@ SELECT
     c.display_name,
     o.name as organization,
     c.job_title,
-    pr.role_code,
-    pr.role_name_en as project_role,
-    pr.role_category,
+    cp.role_name as project_role,
     c.preferred_channel,
     c.preferred_language,
     (SELECT channel_value FROM contact_channels WHERE contact_id = c.id
@@ -480,15 +478,8 @@ SELECT
 FROM contact_projects cp
 JOIN contacts c ON cp.contact_id = c.id
 LEFT JOIN organizations o ON c.organization_id = o.id
-JOIN project_roles pr ON cp.role_code = pr.role_code
 WHERE cp.is_active = TRUE AND c.is_active = TRUE
-ORDER BY
-    CASE pr.role_category
-        WHEN 'donor' THEN 1
-        WHEN 'client' THEN 2
-        WHEN 'consultant' THEN 3
-        WHEN 'partner' THEN 4
-    END;
+ORDER BY cp.role_name, c.display_name;
 
 -- Contact projects view
 CREATE OR REPLACE VIEW v_contact_projects AS
@@ -500,10 +491,7 @@ SELECT
     cp.project_id,
     p.code as project_code,
     p.full_name as project_name,
-    cp.role_code,
-    pr.role_name_en,
-    pr.role_name_ru,
-    pr.role_category,
+    cp.role_name,
     cp.is_active,
     cp.workdays_allocated,
     cp.start_date,
@@ -512,5 +500,61 @@ SELECT
 FROM contact_projects cp
 JOIN contacts c ON cp.contact_id = c.id
 LEFT JOIN organizations o ON c.organization_id = o.id
-JOIN project_roles pr ON cp.role_code = pr.role_code
 JOIN projects p ON cp.project_id = p.id;
+
+-- =============================================================================
+-- MIGRATIONS (idempotent - safe to run multiple times)
+-- =============================================================================
+
+-- Migration: role_code -> role_name (2024-12-26)
+DO $$
+BEGIN
+    -- Add role_name column if not exists
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'contact_projects' AND column_name = 'role_name'
+    ) THEN
+        ALTER TABLE contact_projects ADD COLUMN role_name VARCHAR(100);
+    END IF;
+
+    -- Migrate data from role_code to role_name if role_code still exists
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'contact_projects' AND column_name = 'role_code'
+    ) THEN
+        UPDATE contact_projects cp
+        SET role_name = pr.role_name_en
+        FROM project_roles pr
+        WHERE cp.role_code = pr.role_code AND cp.role_name IS NULL;
+
+        -- Drop old FK constraint
+        ALTER TABLE contact_projects DROP CONSTRAINT IF EXISTS contact_projects_role_code_fkey;
+
+        -- Drop old UNIQUE constraint
+        ALTER TABLE contact_projects DROP CONSTRAINT IF EXISTS contact_projects_contact_id_project_id_role_code_key;
+
+        -- Drop role_code column
+        ALTER TABLE contact_projects DROP COLUMN role_code;
+    END IF;
+
+    -- Set NOT NULL if not already set
+    ALTER TABLE contact_projects ALTER COLUMN role_name SET NOT NULL;
+
+    -- Add CHECK constraint for non-empty role_name
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.check_constraints
+        WHERE constraint_name = 'contact_projects_role_name_not_empty'
+    ) THEN
+        ALTER TABLE contact_projects ADD CONSTRAINT contact_projects_role_name_not_empty
+        CHECK (TRIM(role_name) <> '');
+    END IF;
+
+    -- Add UNIQUE constraint
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.table_constraints
+        WHERE constraint_name = 'contact_projects_contact_project_role_unique'
+    ) THEN
+        ALTER TABLE contact_projects ADD CONSTRAINT contact_projects_contact_project_role_unique
+        UNIQUE (contact_id, project_id, role_name);
+    END IF;
+END $$;
