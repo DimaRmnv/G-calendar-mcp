@@ -783,7 +783,7 @@ async def org_add(
     first_contact_date: Optional[str] = None,
     notes: Optional[str] = None,
 ) -> dict:
-    """Create a new organization."""
+    """Create organization. Returns ORG_COMPACT: {id, name, short_name, organization_type, country, relationship_status}."""
     if organization_type and organization_type not in ORGANIZATION_TYPES:
         raise ValueError(f"Invalid organization_type. Must be one of: {ORGANIZATION_TYPES}")
     if relationship_status not in RELATIONSHIP_STATUSES:
@@ -800,11 +800,28 @@ async def org_add(
             name, short_name, name_local, organization_type, parent_org_id,
             country, city, website, context, relationship_status, first_contact_date, notes
         )
-        return await org_get(id=row['id'])
+        return {
+            "id": row['id'],
+            "name": name,
+            "short_name": short_name,
+            "organization_type": organization_type,
+            "country": country,
+            "relationship_status": relationship_status
+        }
 
 
-async def org_get(id: Optional[int] = None, name: Optional[str] = None) -> Optional[dict]:
-    """Get organization by id or name."""
+async def org_get(
+    id: Optional[int] = None,
+    name: Optional[str] = None,
+    include_projects: bool = False
+) -> Optional[dict]:
+    """Get organization (ORG_FULL).
+
+    Args:
+        id: Organization ID
+        name: Organization name
+        include_projects: If True, include projects: [{id, code, description, org_role, is_lead}]
+    """
     async with get_db() as conn:
         if id is not None:
             row = await conn.fetchrow("SELECT * FROM organizations WHERE id = $1", id)
@@ -812,7 +829,35 @@ async def org_get(id: Optional[int] = None, name: Optional[str] = None) -> Optio
             row = await conn.fetchrow("SELECT * FROM organizations WHERE name = $1", name)
         else:
             return None
-        return dict(row) if row else None
+
+        if not row:
+            return None
+
+        result = dict(row)
+
+        if include_projects:
+            result["projects"] = await get_org_projects_compact(result["id"])
+
+        return result
+
+
+async def get_org_projects_compact(organization_id: int) -> list[dict]:
+    """Get projects for organization in compact format.
+
+    Returns: [{id, code, description, org_role, is_lead}]
+    """
+    async with get_db() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT p.id, p.code, p.description, po.org_role, po.is_lead
+            FROM projects p
+            JOIN project_organizations po ON p.id = po.project_id
+            WHERE po.organization_id = $1
+            ORDER BY p.is_active DESC, p.code
+            """,
+            organization_id
+        )
+        return [dict(row) for row in rows]
 
 
 async def org_list(
@@ -821,7 +866,7 @@ async def org_list(
     relationship_status: Optional[str] = None,
     active_only: bool = True,
 ) -> list[dict]:
-    """List organizations with optional filters."""
+    """List organizations. Returns ORG_COMPACT: [{id, name, short_name, organization_type, country, relationship_status}]."""
     async with get_db() as conn:
         conditions = []
         params = []
@@ -842,7 +887,7 @@ async def org_list(
         if active_only:
             conditions.append("is_active = TRUE")
 
-        query = "SELECT * FROM organizations"
+        query = "SELECT id, name, short_name, organization_type, country, relationship_status FROM organizations"
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
         query += " ORDER BY name"
@@ -852,14 +897,19 @@ async def org_list(
 
 
 async def org_update(id: int, **kwargs) -> Optional[dict]:
-    """Update organization by id."""
+    """Update organization. Returns ORG_COMPACT: {id, name, short_name, organization_type, country, relationship_status}."""
     allowed_fields = {"name", "short_name", "name_local", "organization_type", "parent_org_id",
                      "country", "city", "website", "context", "relationship_status",
                      "first_contact_date", "is_active", "notes"}
     updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
 
     if not updates:
-        return await org_get(id=id)
+        async with get_db() as conn:
+            row = await conn.fetchrow(
+                "SELECT id, name, short_name, organization_type, country, relationship_status FROM organizations WHERE id = $1",
+                id
+            )
+            return dict(row) if row else None
 
     if "organization_type" in updates and updates["organization_type"] not in ORGANIZATION_TYPES:
         raise ValueError(f"Invalid organization_type. Must be one of: {ORGANIZATION_TYPES}")
@@ -882,7 +932,11 @@ async def org_update(id: int, **kwargs) -> Optional[dict]:
         )
         if result == "UPDATE 0":
             return None
-    return await org_get(id=id)
+        row = await conn.fetchrow(
+            "SELECT id, name, short_name, organization_type, country, relationship_status FROM organizations WHERE id = $1",
+            id
+        )
+        return dict(row) if row else None
 
 
 async def org_delete(id: int) -> bool:
@@ -893,12 +947,13 @@ async def org_delete(id: int) -> bool:
 
 
 async def org_search(query: str, limit: int = 20) -> list[dict]:
-    """Search organizations by name or short_name."""
+    """Search organizations. Returns ORG_COMPACT: [{id, name, short_name, organization_type, country, relationship_status}]."""
     async with get_db() as conn:
         search_pattern = f"%{query}%"
         rows = await conn.fetch(
             """
-            SELECT * FROM organizations
+            SELECT id, name, short_name, organization_type, country, relationship_status
+            FROM organizations
             WHERE name ILIKE $1
                OR short_name ILIKE $1
                OR name_local ILIKE $1
@@ -1025,13 +1080,12 @@ async def project_org_delete(id: int) -> bool:
 
 
 async def get_project_organizations(project_id: int) -> list[dict]:
-    """Get all organizations linked to a project."""
+    """Get organizations for project. Returns ORG_COMPACT + role fields."""
     async with get_db() as conn:
         rows = await conn.fetch(
             """
-            SELECT o.*, po.org_role, po.is_lead, po.contract_value as link_contract_value,
-                   po.currency as link_currency, po.start_date as link_start_date,
-                   po.end_date as link_end_date, po.notes as link_notes
+            SELECT o.id, o.name, o.short_name, o.organization_type, o.country, o.relationship_status,
+                   po.org_role, po.is_lead, po.notes as link_notes
             FROM organizations o
             JOIN project_organizations po ON o.id = po.organization_id
             WHERE po.project_id = $1
@@ -1043,13 +1097,12 @@ async def get_project_organizations(project_id: int) -> list[dict]:
 
 
 async def get_organization_projects(organization_id: int) -> list[dict]:
-    """Get all projects linked to an organization."""
+    """Get projects for organization. Returns PROJECT_COMPACT + role fields."""
     async with get_db() as conn:
         rows = await conn.fetch(
             """
-            SELECT p.*, po.org_role, po.is_lead, po.contract_value as link_contract_value,
-                   po.currency as link_currency, po.start_date as link_start_date,
-                   po.end_date as link_end_date, po.notes as link_notes
+            SELECT p.id, p.code, p.description, p.is_active, p.structure_level,
+                   po.org_role, po.is_lead, po.notes as link_notes
             FROM projects p
             JOIN project_organizations po ON p.id = po.project_id
             WHERE po.organization_id = $1

@@ -151,7 +151,11 @@ async def _execute_operation(op: str, p: dict) -> dict:
             notes=p.get("notes"),
         )
     elif op == "org_get":
-        return await org_get(id=p.get("id"), name=p.get("name"))
+        return await org_get(
+            id=p.get("id"),
+            name=p.get("name"),
+            include_projects=p.get("include_projects", False)
+        )
     elif op == "org_list":
         orgs = await org_list(
             organization_type=p.get("organization_type"),
@@ -164,7 +168,7 @@ async def _execute_operation(op: str, p: dict) -> dict:
         return await org_update(id=p["id"], **{k: v for k, v in p.items() if k != "id"})
     elif op == "org_delete":
         deleted = await org_delete(id=p["id"])
-        return {"deleted": deleted}
+        return {"deleted": deleted, "id": p["id"]}
     elif op == "org_search":
         orgs = await org_search(query=p["query"], limit=p.get("limit", 20))
         return {"organizations": orgs}
@@ -195,7 +199,7 @@ async def _execute_operation(op: str, p: dict) -> dict:
         return await project_org_update(id=p["id"], **{k: v for k, v in p.items() if k != "id"})
     elif op == "project_org_delete":
         deleted = await project_org_delete(id=p["id"])
-        return {"deleted": deleted}
+        return {"deleted": deleted, "id": p["id"]}
     elif op == "project_orgs":
         orgs = await get_project_organizations(project_id=p["project_id"])
         return {"organizations": orgs}
@@ -351,10 +355,20 @@ async def projects(operations: list[dict]) -> dict:
             → orgs: [{id, name, short_name, org_role, is_lead}]
             → team: [{contact_id, display_name, role_code, role_name}]
 
+        ORG_COMPACT: {id, name, short_name, organization_type, country, relationship_status}
+            → Returned by: org_list, org_search, org_add, org_update
+        ORG_FULL: ORG_COMPACT + name_local, parent_org_id, city, website, context,
+                  first_contact_date, is_active, notes, created_at, updated_at
+            → Returned by: org_get
+        ORG_FULL + projects: ORG_FULL + projects[{id, code, description, org_role, is_lead}]
+            → Returned by: org_get(include_projects=True)
+
     DECISION GUIDE:
         Need project structure for calendar? → project_list_active
         Need project details + orgs + team? → project_get(id, include_orgs=True, include_team=True)
         Need quick project list? → project_list
+        Need org details + their projects? → org_get(id, include_projects=True)
+        Need quick org list? → org_list or org_search
 
     STRUCTURE LEVELS (for calendar events):
         Level 1: PROJECT * Description
