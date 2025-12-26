@@ -337,59 +337,120 @@ async def _execute_operation(op: str, p: dict) -> dict:
 async def projects(operations: list[dict]) -> dict:
     """Projects, phases, tasks, and organizations management.
 
-    REPORTS - IMPORTANT FOR USER:
-        report_week/month/custom → returns download_url (Excel, TTL=1h)
-        ALWAYS show download_url as clickable link to user!
-
     SKILL REQUIRED: Read projects-management skill for full operations.
     Read calendar-manager skill for event formatting by project structure.
 
-    CRITICAL FOR CALENDAR EVENTS:
-        projects(operations=[{"op": "project_list_active"}])
-        → Returns structure_level, phases[].tasks[], universal_tasks[]
-        → ALWAYS call before creating work-related calendar events
+    PROJECTS - TWO MAIN USE CASES:
+
+        1. CALENDAR EVENTS → use project_list_active
+           Returns structure_level, format string, phases with nested tasks.
+           Model uses this to format event summary: "CAYIB * TJ-ESKHATA * 1.2 * Site visit"
+
+        2. PROJECT SELECTION → use project_list (compact)
+           Returns id, code, description for dropdowns/pickers.
+           Then use project_get with include_orgs/include_team for related data.
+
+    PROJECT OPERATIONS:
+
+        project_list        : All projects (compact). Filters: is_active, is_billable.
+                              Returns: PROJECT_COMPACT[]
+
+        project_list_active : Active projects with full structure (phases[].tasks[], universal_tasks[]).
+                              Returns: PROJECT_CALENDAR[]
+
+        project_get         : Full project details. Params: id, include_orgs, include_team.
+                              Returns: PROJECT_FULL, optionally with orgs[] and team[]
+
+        project_add/update/delete/activate/deactivate: Standard CRUD operations.
+
+    PHASES:
+
+        phase_list   : Phases of project (compact). Requires: project_id.
+        phase_get    : Phase details. Params: id, include_tasks.
+        phase_add/update/delete: Standard CRUD.
+
+    TASKS:
+
+        task_list    : Tasks (compact). Requires: phase_id OR project_id.
+        task_get     : Task details. Requires: id.
+        task_add     : Create. Requires: code + (phase_id OR project_id).
+                       phase_id → phase-linked task
+                       project_id only → universal task (available for all phases)
+        task_update/delete: Standard CRUD.
 
     ORGANIZATIONS:
-        LIST/SEARCH return COMPACT format (6 fields) for efficient lookups.
-        Use org_get for FULL details. Add include_projects=True for participation.
 
-        org_list      : Compact list. Filters: organization_type, country,
-                        relationship_status, is_active
+        LIST/SEARCH return COMPACT (6 fields). Use org_get for FULL details.
+
+        org_list      : All orgs (compact). Filters: organization_type, country,
+                        relationship_status, is_active. Returns: ORG_COMPACT[]
         org_search    : Search name/short_name. Returns: ORG_COMPACT[]
-        org_get       : Full details. Params: id OR name, include_projects?
-        org_add/update/delete : CRUD. Requires: id (or name for add)
+        org_get       : Full details. Params: id OR name, include_projects.
+                        Returns: ORG_FULL, optionally with projects[]
+        org_add/update/delete: Standard CRUD. Returns: ORG_COMPACT or {deleted, id}.
 
-    PROJECT-ORG RELATIONSHIPS:
-        project_orgs      : Orgs in project (compact + role). Requires: project_id
-        org_projects      : Projects of org (compact + role). Requires: organization_id
-        project_org_add   : Link org to project. Requires: project_id, organization_id, org_role
-        project_org_list/get/update/delete : Raw link CRUD
+    PROJECT-ORG LINKS:
+
+        project_orgs      : Orgs in project. Requires: project_id.
+                            Returns: ORG_COMPACT + org_role, is_lead, link_notes
+        org_projects      : Projects of org. Requires: organization_id.
+                            Returns: PROJECT_COMPACT + org_role, is_lead, link_notes
+        project_org_add   : Link org to project. Requires: project_id, organization_id, org_role.
+        project_org_list/get/update/delete: Raw link CRUD.
+
+    REPORTS - IMPORTANT:
+
+        report_status: Quick WTD/MTD summary.
+        report_week/report_month/report_custom: Generate Excel report.
+            → Response contains download_url - clickable link to Excel file
+            → ALWAYS show link to user: "Скачать отчёт: [download_url]"
+            → Link expires in 1 hour
 
     FIELD SETS:
+
+        PROJECT_COMPACT: id, code, description, is_billable, is_active, country
+
+        PROJECT_CALENDAR: id, code, description, structure_level, my_role, format,
+                          phases[{id, code, description, tasks[]}], universal_tasks[]
+
+        PROJECT_FULL: All table fields including timestamps.
+            + include_orgs: orgs[{id, name, short_name, org_role, is_lead}]
+            + include_team: team[{contact_id, display_name, role_code, role_name}]
+
         ORG_COMPACT: id, name, short_name, organization_type, country, relationship_status
+
         ORG_FULL: ORG_COMPACT + name_local, parent_org_id, city, website, context,
                   first_contact_date, is_active, notes, created_at, updated_at
-        PROJECT_COMPACT (in org_projects): id, code, description, is_active, structure_level
+            + include_projects: projects[{id, code, description, org_role, is_lead}]
 
-    OPERATION GROUPS:
-        Projects: project_add, project_get, project_list, project_list_active, project_update,
-                  project_delete, project_activate, project_deactivate
-        Phases: phase_add, phase_get, phase_list, phase_update, phase_delete
-        Tasks: task_add (phase_id OR project_id), task_get, task_list, task_update, task_delete
-        Organizations: org_add, org_get, org_list, org_update, org_delete, org_search
-        Project-Org: project_org_add/get/list/update/delete, project_orgs, org_projects
-        Roles: role_add/get/list/update/delete
-        Norms: norm_add/get/list/delete
-        Reports: report_status, report_week, report_month, report_custom
-        System: init, config_get/set/list, exclusion_add/list/delete, cleanup_exports
+    DECISION GUIDE:
+
+        "Create calendar event"     → project_list_active
+        "Which projects exist?"     → project_list
+        "Who works on CAYIB?"       → project_get(id, include_team=True)
+        "Which orgs in CAYIB?"      → project_get(id, include_orgs=True) OR project_orgs(project_id)
+        "Find donor orgs"           → org_list(organization_type="donor")
+        "Org details"               → org_get(id) or org_get(name="ADB")
+        "ADB's projects"            → org_projects(organization_id) or org_get(id, include_projects=True)
+        "Add phase/task"            → phase_add / task_add
+        "Time tracking report"      → report_week / report_month
+
+    STRUCTURE LEVELS (for calendar formatting):
+
+        Level 1: PROJECT * Description
+        Level 2: PROJECT * PHASE * Description
+        Level 3: PROJECT * PHASE * TASK * Description
 
     Examples:
         projects(operations=[{"op": "project_list_active"}])
+        projects(operations=[{"op": "project_list", "is_active": true}])
+        projects(operations=[{"op": "project_get", "id": 1, "include_orgs": true, "include_team": true}])
         projects(operations=[{"op": "org_list", "organization_type": "donor"}])
         projects(operations=[{"op": "org_get", "id": 5, "include_projects": true}])
         projects(operations=[{"op": "org_get", "name": "Asian Development Bank"}])
         projects(operations=[{"op": "project_orgs", "project_id": 1}])
         projects(operations=[{"op": "org_projects", "organization_id": 5}])
+        projects(operations=[{"op": "task_add", "project_id": 1, "code": "GEN", "description": "General"}])
     """
     # Check database exists (async)
     db_exists = await database_exists()
