@@ -60,7 +60,6 @@ async def _execute_operation(op: str, p: dict) -> dict:
     if op == "contact_add":
         return await contact_add(
             first_name=p["first_name"], last_name=p["last_name"],
-            organization=p.get("organization"), organization_type=p.get("organization_type"),
             organization_id=p.get("organization_id"), org_notes=p.get("org_notes"),
             job_title=p.get("job_title"), department=p.get("department"),
             country=p.get("country"), city=p.get("city"), timezone=p.get("timezone"),
@@ -80,7 +79,7 @@ async def _execute_operation(op: str, p: dict) -> dict:
         )
     elif op == "contact_list":
         contacts = await contact_list(
-            organization=p.get("organization"), organization_type=p.get("organization_type"),
+            organization=p.get("organization"),
             country=p.get("country"), project_id=p.get("project_id"),
             role_code=p.get("role_code"), preferred_channel=p.get("preferred_channel"),
             org_type=p.get("org_type"), active_only=p.get("active_only", True)

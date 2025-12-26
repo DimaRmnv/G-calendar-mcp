@@ -243,12 +243,8 @@ CREATE TABLE IF NOT EXISTS contacts (
     first_name TEXT NOT NULL,
     last_name TEXT NOT NULL,
     display_name TEXT GENERATED ALWAYS AS (first_name || ' ' || last_name) STORED,
-    -- Organization (v2: FK to organizations table)
+    -- Organization (FK to organizations table)
     organization_id INTEGER REFERENCES organizations(id),
-    organization TEXT,  -- Legacy text name
-    organization_type TEXT CHECK(organization_type IN
-        ('donor', 'dfi', 'bank', 'mfi', 'nbfi', 'government', 'regulator',
-         'client', 'vendor', 'consulting', 'ngo', 'association', 'training_provider', 'partner', 'other')),
     org_notes TEXT,  -- Contact's role/context within organization
     job_title TEXT,
     department TEXT,
@@ -270,7 +266,6 @@ CREATE TABLE IF NOT EXISTS contacts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_contacts_name ON contacts(first_name, last_name);
-CREATE INDEX IF NOT EXISTS idx_contacts_org ON contacts(organization);
 CREATE INDEX IF NOT EXISTS idx_contacts_org_id ON contacts(organization_id);
 CREATE INDEX IF NOT EXISTS idx_contacts_display ON contacts(display_name);
 CREATE INDEX IF NOT EXISTS idx_contacts_country ON contacts(country);

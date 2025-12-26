@@ -111,8 +111,6 @@ def get_connection():
 async def contact_add(
     first_name: str,
     last_name: str,
-    organization: Optional[str] = None,
-    organization_type: Optional[str] = None,
     organization_id: Optional[int] = None,
     org_notes: Optional[str] = None,
     job_title: Optional[str] = None,
@@ -129,8 +127,6 @@ async def contact_add(
     notes: Optional[str] = None
 ) -> dict:
     """Create a new contact. Returns CONTACT_COMPACT."""
-    if organization_type and organization_type not in ORGANIZATION_TYPES:
-        raise ValueError(f"Invalid organization_type. Must be one of: {ORGANIZATION_TYPES}")
     if preferred_channel not in PREFERRED_CHANNELS:
         raise ValueError(f"Invalid preferred_channel. Must be one of: {PREFERRED_CHANNELS}")
 
@@ -138,25 +134,33 @@ async def contact_add(
         row = await conn.fetchrow(
             """
             INSERT INTO contacts (
-                first_name, last_name, organization, organization_type, organization_id, org_notes,
+                first_name, last_name, organization_id, org_notes,
                 job_title, department, country, city, timezone,
                 preferred_channel, preferred_language, context,
                 relationship_type, relationship_strength, last_interaction_date, notes
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
             RETURNING id
             """,
-            first_name, last_name, organization, organization_type, organization_id, org_notes,
+            first_name, last_name, organization_id, org_notes,
             job_title, department, country, city, timezone,
             preferred_channel, preferred_language, context,
             relationship_type, relationship_strength, last_interaction_date, notes
         )
+        # Get organization_name if organization_id provided
+        org_name = None
+        if organization_id:
+            org_row = await conn.fetchrow(
+                "SELECT name FROM organizations WHERE id = $1", organization_id
+            )
+            org_name = org_row['name'] if org_row else None
+
         # Return CONTACT_COMPACT
         return {
             "id": row['id'],
             "first_name": first_name,
             "last_name": last_name,
             "display_name": f"{first_name} {last_name}",
-            "organization_name": organization,
+            "organization_name": org_name,
             "job_title": job_title,
             "country": country,
             "preferred_channel": preferred_channel
@@ -269,7 +273,6 @@ async def contact_get(
 
 async def contact_list(
     organization: Optional[str] = None,
-    organization_type: Optional[str] = None,
     country: Optional[str] = None,
     project_id: Optional[int] = None,
     role_code: Optional[str] = None,
@@ -301,11 +304,9 @@ async def contact_list(
                 conditions.append(f"organization_name ILIKE ${param_idx}")
                 params.append(f"%{organization}%")
                 param_idx += 1
-            # Support both organization_type and org_type
-            org_type_filter = organization_type or org_type
-            if org_type_filter:
+            if org_type:
                 conditions.append(f"org_type = ${param_idx}")
-                params.append(org_type_filter)
+                params.append(org_type)
                 param_idx += 1
             if country:
                 conditions.append(f"country = ${param_idx}")
@@ -331,7 +332,7 @@ async def contact_list(
 async def contact_update(id: int, **kwargs) -> Optional[dict]:
     """Update contact by id. Returns CONTACT_COMPACT."""
     allowed_fields = {
-        'first_name', 'last_name', 'organization', 'organization_type', 'organization_id', 'org_notes',
+        'first_name', 'last_name', 'organization_id', 'org_notes',
         'job_title', 'department', 'country', 'city', 'timezone',
         'preferred_channel', 'preferred_language', 'context',
         'relationship_type', 'relationship_strength', 'last_interaction_date',
@@ -339,8 +340,6 @@ async def contact_update(id: int, **kwargs) -> Optional[dict]:
     }
     updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
 
-    if 'organization_type' in updates and updates['organization_type'] not in ORGANIZATION_TYPES:
-        raise ValueError(f"Invalid organization_type. Must be one of: {ORGANIZATION_TYPES}")
     if 'preferred_channel' in updates and updates['preferred_channel'] not in PREFERRED_CHANNELS:
         raise ValueError(f"Invalid preferred_channel. Must be one of: {PREFERRED_CHANNELS}")
 
@@ -488,7 +487,7 @@ async def _contact_search_fuzzy(query: str, limit: int = 20, threshold: int = 60
             'name': contact.get('display_name') or '',
             'first_name': contact.get('first_name') or '',
             'last_name': contact.get('last_name') or '',
-            'organization': contact.get('organization') or '',
+            'organization': contact.get('organization_name') or '',
             'country': contact.get('country') or '',
             'job_title': contact.get('job_title') or '',
         }
