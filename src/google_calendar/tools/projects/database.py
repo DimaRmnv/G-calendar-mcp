@@ -1095,7 +1095,7 @@ async def get_project_team_compact(project_id: int) -> list[dict]:
             JOIN contact_projects cp ON c.id = cp.contact_id
             LEFT JOIN project_roles pr ON pr.role_code = cp.role_code
             WHERE cp.project_id = $1 AND cp.is_active = TRUE
-            ORDER BY pr.sort_order, c.last_name
+            ORDER BY c.last_name
             """,
             project_id
         )
