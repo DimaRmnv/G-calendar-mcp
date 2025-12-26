@@ -158,12 +158,28 @@ async def _find_by_channel(channel_type: str, value: str) -> Optional[dict]:
     return None
 
 
+def _to_contact_resolve(contact: dict, resolved_by: str, match_score: float = None) -> dict:
+    """Convert full contact to CONTACT_RESOLVE format for messaging."""
+    result = {
+        "id": contact["id"],
+        "display_name": contact.get("display_name"),
+        "organization_name": contact.get("organization_name") or contact.get("organization"),
+        "preferred_channel": contact.get("preferred_channel"),
+        "primary_email": contact.get("primary_email"),
+        "telegram_username": contact.get("telegram_username"),
+        "resolved_by": resolved_by
+    }
+    if match_score is not None:
+        result["match_score"] = match_score
+    return result
+
+
 async def resolve_contact(
     identifier: str,
     context: Optional[dict] = None
 ) -> Optional[dict]:
     """
-    Resolve contact from any identifier.
+    Resolve contact from any identifier. Returns CONTACT_RESOLVE format.
 
     Identifier types (auto-detected):
         - Email: john@example.com
@@ -180,12 +196,9 @@ async def resolve_contact(
             - role_code: Prefer contacts with this role
 
     Returns:
-        Full contact dict with:
-        - Basic info (id, first_name, last_name, organization, etc.)
-        - channels: List of all communication channels
-        - projects: List of project assignments
-        - primary_email, primary_phone, etc.: Convenient access to primary channels
-        - None if not found
+        CONTACT_RESOLVE format: {id, display_name, organization_name,
+        preferred_channel, primary_email, telegram_username, resolved_by}
+        None if not found
 
     Examples:
         resolve_contact("Altynbek")  # Name search
@@ -203,26 +216,22 @@ async def resolve_contact(
     if id_type == 'email':
         result = await _find_by_channel('email', identifier)
         if result:
-            result['resolved_by'] = 'email'
-            return result
+            return _to_contact_resolve(result, 'email')
 
     elif id_type == 'telegram':
         result = await _find_by_channel('telegram', identifier)
         if result:
-            result['resolved_by'] = 'telegram'
-            return result
+            return _to_contact_resolve(result, 'telegram')
 
     elif id_type == 'phone':
         result = await _find_by_channel('phone', identifier)
         if result:
-            result['resolved_by'] = 'phone'
-            return result
+            return _to_contact_resolve(result, 'phone')
 
     elif id_type == 'teams_chat':
         result = await _find_by_channel('teams_chat_id', identifier)
         if result:
-            result['resolved_by'] = 'teams'
-            return result
+            return _to_contact_resolve(result, 'teams')
 
     # Name search using fuzzy search
     results = await contact_search(identifier, limit=5, threshold=70)
@@ -245,30 +254,25 @@ async def resolve_contact(
             if project_id:
                 project_ids = [p['project_id'] for p in contact.get('projects', [])]
                 if project_id in project_ids:
-                    contact['resolved_by'] = 'name_with_project_context'
-                    return contact
+                    return _to_contact_resolve(contact, 'name_with_project_context')
 
             # Check organization match
             if organization and contact.get('organization', '').lower() == organization.lower():
-                contact['resolved_by'] = 'name_with_org_context'
-                return contact
+                return _to_contact_resolve(contact, 'name_with_org_context')
 
             # Check role match
             if role_code:
                 roles = [p['role_code'] for p in contact.get('projects', [])]
                 if role_code in roles:
-                    contact['resolved_by'] = 'name_with_role_context'
-                    return contact
+                    return _to_contact_resolve(contact, 'name_with_role_context')
 
     # Return best match (highest score)
     best_match = results[0]
     contact = await _get_contact_with_channels(best_match['id'])
     if contact:
-        contact['resolved_by'] = 'name'
-        contact['match_score'] = best_match.get('match_score', 0)
-        contact['matched_field'] = best_match.get('matched_field', 'unknown')
+        return _to_contact_resolve(contact, 'name', best_match.get('match_score'))
 
-    return contact
+    return None
 
 
 async def get_preferred_channel(
@@ -327,7 +331,7 @@ async def resolve_multiple(
     context: Optional[dict] = None
 ) -> dict:
     """
-    Resolve multiple contacts at once.
+    Resolve multiple contacts at once. Returns CONTACT_RESOLVE format.
 
     Args:
         identifiers: List of identifiers
@@ -335,43 +339,35 @@ async def resolve_multiple(
 
     Returns:
         Dict with:
-        - resolved: List of (identifier, contact) tuples
+        - resolved: List of {identifier, contact (CONTACT_RESOLVE)}
         - unresolved: List of identifiers that couldn't be resolved
-        - duplicates: List of identifiers that resolved to same contact
+        - stats: {total, resolved, unresolved}
     """
     resolved = []
     unresolved = []
-    seen_ids = {}  # contact_id -> first identifier
-    duplicates = []
+    seen_ids = set()
 
     for identifier in identifiers:
         contact = await resolve_contact(identifier, context)
         if contact:
             contact_id = contact['id']
-            if contact_id in seen_ids:
-                duplicates.append({
-                    'identifier': identifier,
-                    'duplicate_of': seen_ids[contact_id],
-                    'contact_id': contact_id
-                })
-            else:
-                seen_ids[contact_id] = identifier
+            if contact_id not in seen_ids:
+                seen_ids.add(contact_id)
                 resolved.append({
                     'identifier': identifier,
                     'contact': contact
                 })
+            # Skip duplicates silently
         else:
             unresolved.append(identifier)
 
     return {
         'resolved': resolved,
         'unresolved': unresolved,
-        'duplicates': duplicates,
         'stats': {
             'total': len(identifiers),
-            'resolved_count': len(resolved),
-            'unresolved_count': len(unresolved),
-            'duplicate_count': len(duplicates)
+            'resolved': len(resolved),
+            'unresolved': len(unresolved)
         }
     }
 

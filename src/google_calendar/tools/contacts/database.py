@@ -42,6 +42,12 @@ CHANNEL_TYPES = (
 )
 ROLE_CATEGORIES = ('consultant', 'client', 'donor', 'partner')
 
+# Field sets for token optimization
+CONTACT_COMPACT_FIELDS = """
+    id, first_name, last_name, display_name,
+    organization_name, job_title, country, preferred_channel
+"""
+
 # Standard project roles (for reference - inserted via schema.sql)
 STANDARD_ROLES = [
     ('TL', 'Team Leader', 'Руководитель группы', 'consultant', 'Overall project leadership'),
@@ -122,7 +128,7 @@ async def contact_add(
     last_interaction_date: Optional[str] = None,
     notes: Optional[str] = None
 ) -> dict:
-    """Create a new contact. Returns created contact with id."""
+    """Create a new contact. Returns CONTACT_COMPACT."""
     if organization_type and organization_type not in ORGANIZATION_TYPES:
         raise ValueError(f"Invalid organization_type. Must be one of: {ORGANIZATION_TYPES}")
     if preferred_channel not in PREFERRED_CHANNELS:
@@ -144,16 +150,75 @@ async def contact_add(
             preferred_channel, preferred_language, context,
             relationship_type, relationship_strength, last_interaction_date, notes
         )
-        return await contact_get(id=row['id'])
+        # Return CONTACT_COMPACT
+        return {
+            "id": row['id'],
+            "first_name": first_name,
+            "last_name": last_name,
+            "display_name": f"{first_name} {last_name}",
+            "organization_name": organization,
+            "job_title": job_title,
+            "country": country,
+            "preferred_channel": preferred_channel
+        }
+
+
+async def get_contact_channels_compact(contact_id: int) -> list[dict]:
+    """Get channels for contact in compact format.
+
+    Returns: [{id, channel_type, channel_value, is_primary}]
+    """
+    async with get_db() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id, channel_type, channel_value, is_primary
+            FROM contact_channels
+            WHERE contact_id = $1
+            ORDER BY is_primary DESC, channel_type
+            """,
+            contact_id
+        )
+        return [dict(row) for row in rows]
+
+
+async def get_contact_projects_compact(contact_id: int) -> list[dict]:
+    """Get projects for contact in compact format.
+
+    Returns: [{project_id, project_code, role_code, role_name}]
+    """
+    async with get_db() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT cp.project_id, p.code as project_code, cp.role_code, pr.role_name_en as role_name
+            FROM contact_projects cp
+            JOIN project_roles pr ON cp.role_code = pr.role_code
+            LEFT JOIN projects p ON cp.project_id = p.id
+            WHERE cp.contact_id = $1 AND cp.is_active = TRUE
+            ORDER BY p.code
+            """,
+            contact_id
+        )
+        return [dict(row) for row in rows]
 
 
 async def contact_get(
     id: Optional[int] = None,
     email: Optional[str] = None,
     telegram: Optional[str] = None,
-    phone: Optional[str] = None
+    phone: Optional[str] = None,
+    include_channels: bool = False,
+    include_projects: bool = False
 ) -> Optional[dict]:
-    """Get contact by id or by channel value."""
+    """Get contact by id or by channel value. Returns CONTACT_FULL format.
+
+    Args:
+        id: Contact ID
+        email: Email address
+        telegram: Telegram username or ID
+        phone: Phone number
+        include_channels: If True, include channels[] array
+        include_projects: If True, include projects[] array
+    """
     async with get_db() as conn:
         if id is not None:
             row = await conn.fetchrow("SELECT * FROM v_contacts_full WHERE id = $1", id)
@@ -188,7 +253,18 @@ async def contact_get(
         else:
             return None
 
-        return dict(row) if row else None
+        if not row:
+            return None
+
+        result = dict(row)
+
+        if include_channels:
+            result["channels"] = await get_contact_channels_compact(result["id"])
+
+        if include_projects:
+            result["projects"] = await get_contact_projects_compact(result["id"])
+
+        return result
 
 
 async def contact_list(
@@ -197,12 +273,14 @@ async def contact_list(
     country: Optional[str] = None,
     project_id: Optional[int] = None,
     role_code: Optional[str] = None,
+    preferred_channel: Optional[str] = None,
+    org_type: Optional[str] = None,
     active_only: bool = True
 ) -> list[dict]:
-    """List contacts with optional filters."""
+    """List contacts with optional filters. Returns CONTACT_COMPACT format."""
     async with get_db() as conn:
         if project_id is not None:
-            # Use project team view
+            # Use project team view (already optimized)
             if role_code:
                 rows = await conn.fetch(
                     "SELECT * FROM v_project_team WHERE project_id = $1 AND role_code = $2",
@@ -214,7 +292,7 @@ async def contact_list(
                     project_id
                 )
         else:
-            # Build dynamic query
+            # Build dynamic query with COMPACT fields
             conditions = []
             params = []
             param_idx = 1
@@ -223,22 +301,27 @@ async def contact_list(
                 conditions.append(f"organization ILIKE ${param_idx}")
                 params.append(f"%{organization}%")
                 param_idx += 1
-            if organization_type:
+            # Support both organization_type and org_type
+            org_type_filter = organization_type or org_type
+            if org_type_filter:
                 conditions.append(f"organization_type = ${param_idx}")
-                params.append(organization_type)
+                params.append(org_type_filter)
                 param_idx += 1
             if country:
                 conditions.append(f"country = ${param_idx}")
                 params.append(country)
                 param_idx += 1
+            if preferred_channel:
+                conditions.append(f"preferred_channel = ${param_idx}")
+                params.append(preferred_channel)
+                param_idx += 1
 
             # v_contacts_full already filters is_active = TRUE
-            base_table = "v_contacts_full" if active_only else "contacts"
-            query = f"SELECT * FROM {base_table}"
+            query = f"SELECT {CONTACT_COMPACT_FIELDS} FROM v_contacts_full"
 
             if conditions:
                 query += " WHERE " + " AND ".join(conditions)
-            query += " ORDER BY display_name"
+            query += " ORDER BY last_name, first_name"
 
             rows = await conn.fetch(query, *params)
 
@@ -246,7 +329,7 @@ async def contact_list(
 
 
 async def contact_update(id: int, **kwargs) -> Optional[dict]:
-    """Update contact by id."""
+    """Update contact by id. Returns CONTACT_COMPACT."""
     allowed_fields = {
         'first_name', 'last_name', 'organization', 'organization_type', 'organization_id', 'org_notes',
         'job_title', 'department', 'country', 'city', 'timezone',
@@ -256,32 +339,35 @@ async def contact_update(id: int, **kwargs) -> Optional[dict]:
     }
     updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
 
-    if not updates:
-        return await contact_get(id=id)
-
     if 'organization_type' in updates and updates['organization_type'] not in ORGANIZATION_TYPES:
         raise ValueError(f"Invalid organization_type. Must be one of: {ORGANIZATION_TYPES}")
     if 'preferred_channel' in updates and updates['preferred_channel'] not in PREFERRED_CHANNELS:
         raise ValueError(f"Invalid preferred_channel. Must be one of: {PREFERRED_CHANNELS}")
 
-    set_parts = []
-    values = []
-    for i, (k, v) in enumerate(updates.items(), 1):
-        set_parts.append(f"{k} = ${i}")
-        values.append(v)
-
-    values.append(id)
-    set_clause = ", ".join(set_parts)
-
     async with get_db() as conn:
-        result = await conn.execute(
-            f"UPDATE contacts SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ${len(values)}",
-            *values
-        )
-        if result == "UPDATE 0":
-            return None
+        if updates:
+            set_parts = []
+            values = []
+            for i, (k, v) in enumerate(updates.items(), 1):
+                set_parts.append(f"{k} = ${i}")
+                values.append(v)
 
-    return await contact_get(id=id)
+            values.append(id)
+            set_clause = ", ".join(set_parts)
+
+            result = await conn.execute(
+                f"UPDATE contacts SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ${len(values)}",
+                *values
+            )
+            if result == "UPDATE 0":
+                return None
+
+        # Return CONTACT_COMPACT
+        row = await conn.fetchrow(
+            f"SELECT {CONTACT_COMPACT_FIELDS} FROM v_contacts_full WHERE id = $1",
+            id
+        )
+        return dict(row) if row else None
 
 
 async def contact_delete(id: int) -> bool:
@@ -324,7 +410,7 @@ async def contact_search(
 
 
 async def _contact_search_like(query: str, limit: int = 20) -> list[dict]:
-    """ILIKE-based search (fallback when rapidfuzz not available)."""
+    """ILIKE-based search (fallback when rapidfuzz not available). Returns CONTACT_COMPACT + email + score."""
     query = query.lstrip('@')
     search_pattern = f"%{query}%"
 
@@ -332,8 +418,9 @@ async def _contact_search_like(query: str, limit: int = 20) -> list[dict]:
         rows = await conn.fetch(
             """
             SELECT DISTINCT ON (cf.id)
-                cf.*,
-                ARRAY_AGG(DISTINCT p.code) FILTER (WHERE p.code IS NOT NULL) as projects
+                cf.id, cf.first_name, cf.last_name, cf.display_name,
+                cf.organization_name, cf.job_title, cf.country, cf.preferred_channel,
+                cf.primary_email
             FROM v_contacts_full cf
             LEFT JOIN contact_channels cc ON cf.id = cc.contact_id
             LEFT JOIN contact_projects cp ON cf.id = cp.contact_id AND cp.is_active = TRUE
@@ -347,13 +434,6 @@ async def _contact_search_like(query: str, limit: int = 20) -> list[dict]:
                OR cc.channel_value ILIKE $1
                OR p.code ILIKE $1
                OR p.description ILIKE $1
-            GROUP BY cf.id, cf.first_name, cf.last_name, cf.display_name, cf.organization_id,
-                     cf.organization_name, cf.org_type, cf.organization, cf.organization_type,
-                     cf.job_title, cf.department, cf.country, cf.city, cf.timezone,
-                     cf.preferred_channel, cf.preferred_language, cf.context,
-                     cf.relationship_type, cf.relationship_strength, cf.last_interaction_date,
-                     cf.primary_email, cf.primary_phone, cf.telegram_chat_id,
-                     cf.telegram_username, cf.teams_chat_id, cf.notes, cf.created_at, cf.updated_at
             ORDER BY cf.id, cf.display_name
             LIMIT $2
             """,
@@ -363,20 +443,21 @@ async def _contact_search_like(query: str, limit: int = 20) -> list[dict]:
         results = []
         for row in rows:
             item = dict(row)
-            item['match_score'] = 100
-            item['matched_field'] = 'like'
+            item['match_score'] = 100.0
             results.append(item)
         return results
 
 
 async def _contact_search_fuzzy(query: str, limit: int = 20, threshold: int = 60) -> list[dict]:
-    """Fuzzy search using rapidfuzz."""
+    """Fuzzy search using rapidfuzz. Returns CONTACT_COMPACT + email + score."""
     query_clean = query.lstrip('@').lower()
 
     async with get_db() as conn:
         rows = await conn.fetch("""
             SELECT
-                cf.*,
+                cf.id, cf.first_name, cf.last_name, cf.display_name,
+                cf.organization_name, cf.organization, cf.job_title, cf.country,
+                cf.preferred_channel, cf.primary_email,
                 STRING_AGG(DISTINCT
                     CASE
                         WHEN cc.channel_type = 'telegram_username' THEN '@' || cc.channel_value
@@ -391,13 +472,9 @@ async def _contact_search_fuzzy(query: str, limit: int = 20, threshold: int = 60
             LEFT JOIN contact_channels cc ON cf.id = cc.contact_id
             LEFT JOIN contact_projects cp ON cf.id = cp.contact_id AND cp.is_active = TRUE
             LEFT JOIN projects p ON cp.project_id = p.id AND p.is_active = TRUE
-            GROUP BY cf.id, cf.first_name, cf.last_name, cf.display_name, cf.organization_id,
-                     cf.organization_name, cf.org_type, cf.organization, cf.organization_type,
-                     cf.job_title, cf.department, cf.country, cf.city, cf.timezone,
-                     cf.preferred_channel, cf.preferred_language, cf.context,
-                     cf.relationship_type, cf.relationship_strength, cf.last_interaction_date,
-                     cf.primary_email, cf.primary_phone, cf.telegram_chat_id,
-                     cf.telegram_username, cf.teams_chat_id, cf.notes, cf.created_at, cf.updated_at
+            GROUP BY cf.id, cf.first_name, cf.last_name, cf.display_name,
+                     cf.organization_name, cf.organization, cf.job_title, cf.country,
+                     cf.preferred_channel, cf.primary_email
         """)
 
     contacts = [dict(row) for row in rows]
@@ -439,7 +516,6 @@ async def _contact_search_fuzzy(query: str, limit: int = 20, threshold: int = 60
 
         # Find best match
         best_score = 0
-        best_field = None
 
         for field_name, field_value in search_fields.items():
             if not field_value:
@@ -451,16 +527,21 @@ async def _contact_search_fuzzy(query: str, limit: int = 20, threshold: int = 60
 
             if score > best_score:
                 best_score = score
-                best_field = field_name
 
         if best_score >= threshold:
-            contact_result = {k: v for k, v in contact.items()
-                            if k not in ('all_channels', 'channel_details',
-                                        'project_codes', 'project_descriptions')}
-            contact_result['match_score'] = best_score
-            contact_result['matched_field'] = best_field
-            if project_codes:
-                contact_result['projects'] = [p for p in project_codes.split('||') if p]
+            # Return CONTACT_COMPACT + email + score
+            contact_result = {
+                "id": contact["id"],
+                "first_name": contact.get("first_name"),
+                "last_name": contact.get("last_name"),
+                "display_name": contact.get("display_name"),
+                "organization_name": contact.get("organization_name"),
+                "job_title": contact.get("job_title"),
+                "country": contact.get("country"),
+                "preferred_channel": contact.get("preferred_channel"),
+                "primary_email": contact.get("primary_email"),
+                "match_score": float(best_score)
+            }
             results.append(contact_result)
 
     results.sort(key=lambda x: (-x['match_score'], x.get('display_name', '')))
@@ -536,41 +617,44 @@ async def channel_get(id: int) -> Optional[dict]:
 
 
 async def channel_update(id: int, **kwargs) -> Optional[dict]:
-    """Update channel by id."""
+    """Update channel by id. Returns compact format."""
     allowed_fields = {'channel_value', 'channel_label', 'is_primary', 'notes'}
     updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
-
-    if not updates:
-        return await channel_get(id)
 
     current = await channel_get(id)
     if not current:
         return None
 
     async with get_db() as conn:
-        # If setting as primary, unset other primaries
-        if updates.get('is_primary'):
-            await conn.execute(
-                """
-                UPDATE contact_channels
-                SET is_primary = FALSE
-                WHERE contact_id = $1 AND channel_type = $2 AND id != $3
-                """,
-                current['contact_id'], current['channel_type'], id
-            )
+        if updates:
+            # If setting as primary, unset other primaries
+            if updates.get('is_primary'):
+                await conn.execute(
+                    """
+                    UPDATE contact_channels
+                    SET is_primary = FALSE
+                    WHERE contact_id = $1 AND channel_type = $2 AND id != $3
+                    """,
+                    current['contact_id'], current['channel_type'], id
+                )
 
-        set_parts = []
-        values = []
-        for i, (k, v) in enumerate(updates.items(), 1):
-            set_parts.append(f"{k} = ${i}")
-            values.append(v)
+            set_parts = []
+            values = []
+            for i, (k, v) in enumerate(updates.items(), 1):
+                set_parts.append(f"{k} = ${i}")
+                values.append(v)
 
-        values.append(id)
-        set_clause = ", ".join(set_parts)
+            values.append(id)
+            set_clause = ", ".join(set_parts)
 
-        await conn.execute(f"UPDATE contact_channels SET {set_clause} WHERE id = ${len(values)}", *values)
+            await conn.execute(f"UPDATE contact_channels SET {set_clause} WHERE id = ${len(values)}", *values)
 
-    return await channel_get(id)
+        # Return compact
+        row = await conn.fetchrow(
+            "SELECT id, contact_id, channel_type, channel_value, is_primary FROM contact_channels WHERE id = $1",
+            id
+        )
+        return dict(row) if row else None
 
 
 async def channel_delete(id: int) -> bool:
@@ -598,14 +682,14 @@ async def assignment_add(
     workdays_allocated: Optional[int] = None,
     notes: Optional[str] = None
 ) -> dict:
-    """Add a project assignment to a contact."""
+    """Add a project assignment to a contact. Returns compact format."""
     role = await role_get(role_code)
     if not role:
         raise ValueError(f"Invalid role_code: {role_code}")
 
     async with get_db() as conn:
-        # Validate project exists
-        project = await conn.fetchrow("SELECT id FROM projects WHERE id = $1", project_id)
+        # Validate project exists and get code
+        project = await conn.fetchrow("SELECT id, code FROM projects WHERE id = $1", project_id)
         if not project:
             raise ValueError(f"Project {project_id} not found")
 
@@ -618,7 +702,14 @@ async def assignment_add(
             """,
             contact_id, project_id, role_code.upper(), start_date, end_date, workdays_allocated, notes
         )
-        return await assignment_get(row['id'])
+        # Return compact
+        return {
+            "id": row['id'],
+            "contact_id": contact_id,
+            "project_id": project_id,
+            "project_code": project['code'],
+            "role_code": role_code.upper()
+        }
 
 
 async def assignment_get(id: int) -> Optional[dict]:
@@ -634,7 +725,7 @@ async def assignment_list(
     role_code: Optional[str] = None,
     active_only: bool = True
 ) -> list[dict]:
-    """List project assignments with optional filters."""
+    """List project assignments with optional filters. Returns compact format."""
     async with get_db() as conn:
         conditions = []
         params = []
@@ -655,7 +746,8 @@ async def assignment_list(
         if active_only:
             conditions.append("is_active = TRUE")
 
-        query = "SELECT * FROM v_contact_projects"
+        # Return compact fields only
+        query = "SELECT id, project_id, project_code, role_code, role_name_en as role_name, is_active FROM v_contact_projects"
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
 

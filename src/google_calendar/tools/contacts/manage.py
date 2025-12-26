@@ -74,15 +74,18 @@ async def _execute_operation(op: str, p: dict) -> dict:
         )
     elif op == "contact_get":
         return await contact_get(
-            id=p.get("id"), email=p.get("email"), telegram=p.get("telegram"), phone=p.get("phone")
+            id=p.get("id"), email=p.get("email"), telegram=p.get("telegram"), phone=p.get("phone"),
+            include_channels=p.get("include_channels", False),
+            include_projects=p.get("include_projects", False)
         )
     elif op == "contact_list":
         contacts = await contact_list(
             organization=p.get("organization"), organization_type=p.get("organization_type"),
             country=p.get("country"), project_id=p.get("project_id"),
-            role_code=p.get("role_code"), active_only=p.get("active_only", True)
+            role_code=p.get("role_code"), preferred_channel=p.get("preferred_channel"),
+            org_type=p.get("org_type"), active_only=p.get("active_only", True)
         )
-        return {"contacts": contacts}
+        return {"contacts": contacts, "total": len(contacts)}
     elif op == "contact_update":
         contact_id = p.get("id") or p.get("contact_id")
         updates = {k: v for k, v in p.items() if k not in ("id", "contact_id", "op")}
@@ -90,7 +93,7 @@ async def _execute_operation(op: str, p: dict) -> dict:
     elif op == "contact_delete":
         contact_id = p.get("id") or p.get("contact_id")
         deleted = await contact_delete(id=contact_id)
-        return {"deleted": deleted}
+        return {"deleted": deleted, "id": contact_id}
     elif op == "contact_search":
         contacts = await contact_search(
             p["query"], limit=p.get("limit", 20), threshold=p.get("threshold", 60)
@@ -121,7 +124,7 @@ async def _execute_operation(op: str, p: dict) -> dict:
     elif op == "channel_delete":
         channel_id = p.get("id") or p.get("channel_id")
         deleted = await channel_delete(id=channel_id)
-        return {"deleted": deleted}
+        return {"deleted": deleted, "id": channel_id}
     elif op == "channel_set_primary":
         channel_id = p.get("id") or p.get("channel_id")
         return await channel_set_primary(id=channel_id)
@@ -149,7 +152,7 @@ async def _execute_operation(op: str, p: dict) -> dict:
     elif op == "assignment_delete":
         assignment_id = p.get("id") or p.get("assignment_id")
         deleted = await assignment_delete(id=assignment_id)
-        return {"deleted": deleted}
+        return {"deleted": deleted, "id": assignment_id}
     elif op == "assignment_activate":
         assignment_id = p.get("id") or p.get("assignment_id")
         return await assignment_update(id=assignment_id, is_active=True)
@@ -249,57 +252,82 @@ async def contacts(operations: list[dict]) -> dict:
     SKILL REQUIRED: Read contacts-management skill for database operations.
     For sending messages, read mcp-orchestration skill for channel routing.
 
-    KEY OPERATIONS FOR CALENDAR/COMMUNICATION:
+    CONTACTS:
 
-        project_team: Get all contacts for a project with roles and emails
-            → Use for meeting attendees, team notifications
-            contacts(operations=[{"op": "project_team", "project_id": 5}])
+        LIST/SEARCH return COMPACT format (id, name, org, job_title, country, channel).
+        Use contact_get(id) for FULL details. Add include_channels/include_projects for related data.
 
-        contact_resolve: Find contact by partial name
-            → Returns email, preferred_channel, organization
-            contacts(operations=[{"op": "contact_resolve", "identifier": "Altynbek"}])
+        contact_list    : List all (compact). Filters: organization_id, country, org_type,
+                          preferred_channel. Returns: CONTACT_COMPACT[]
+        contact_search  : Search by name/org/job (compact + email + score). Returns: CONTACT_COMPACT[]
+        contact_get     : Full details. Params: id, include_channels (bool), include_projects (bool).
+                          Returns: CONTACT_FULL, optionally with channels[] and projects[]
+        contact_add     : Create. Requires: first_name, last_name. Returns: CONTACT_COMPACT
+        contact_update  : Update. Requires: id. Returns: CONTACT_COMPACT
+        contact_delete  : Delete. Requires: id. Returns: {deleted, id}
 
-        contact_resolve_multiple: Batch resolve
-            contacts(operations=[{"op": "contact_resolve_multiple", "identifiers": ["Michael", "Elena"]}])
+    QUICK LOOKUP (for messaging):
 
-    Batch operations via operations=[{op, ...params}].
+        contact_resolve          : Find by partial name. Returns: id, display_name, org,
+                                   preferred_channel, primary_email, telegram_username
+        contact_resolve_multiple : Batch resolve. Returns: array of above
 
-    CONTACT WORKFLOW:
-        When adding a new contact, ALWAYS ask:
-        1. Organization?
-           → First: projects(operations=[{"op": "org_search", "query": "WB"}]) to find org
-           → Or: projects(operations=[{"op": "org_add", "name": "World Bank"}]) to create
-           → Then use organization_id in contact_add
-        2. Project and role? (→ assignment_add with notes)
-        3. Email/phone? (→ channel_add)
+    PROJECT TEAMS:
 
-        Use batch for complete contact creation:
+        project_team    : Team members with roles and contact info (already optimized).
+                          Requires: project_id. Returns: team[]
+
+    CHANNELS:
+
+        channel_list    : Contact's communication channels. Requires: contact_id
+        channel_add     : Add channel. Requires: contact_id, channel_type, channel_value
+        channel_update  : Update. Requires: id
+        channel_delete  : Delete. Requires: id. Returns: {deleted, id}
+        channel_set_primary : Set as primary. Requires: id
+
+    ASSIGNMENTS (contact ↔ project roles):
+
+        assignment_list   : Contact's project assignments (compact). Requires: contact_id
+        assignment_add    : Assign to project. Requires: contact_id, project_id, role_code
+        assignment_update : Update. Requires: id
+        assignment_delete : Remove. Requires: id. Returns: {deleted, id}
+
+    FIELD SETS:
+
+        CONTACT_COMPACT: id, first_name, last_name, display_name, organization_name,
+                         job_title, country, preferred_channel
+
+        CONTACT_FULL: CONTACT_COMPACT + organization_id, org_type, department, city, timezone,
+                      preferred_language, context, relationship_type, relationship_strength,
+                      last_interaction_date, primary_email, primary_phone, telegram_chat_id,
+                      telegram_username, teams_chat_id, notes, created_at, updated_at
+
+        CONTACT_FULL + related: CONTACT_FULL + channels[{type, value, is_primary}]
+                                + projects[{project_code, role_code, role_name}]
+
+    USAGE PATTERNS:
+
+        Dropdown/picker        → contact_list or contact_search (compact)
+        Contact card           → contact_get(id, include_channels=True, include_projects=True)
+        Send message           → contact_resolve("Altynbek") → get preferred_channel + value
+        Add to project team    → contact_list → select → assignment_add
+        Project stakeholders   → project_team(project_id)
+        Update contact info    → contact_get(id) → contact_update(id, ...)
+
+    BATCH OPERATIONS:
+        contact_id=-1 means "use ID from previous contact_add in same batch"
         contacts(operations=[
-            {"op": "contact_add", "first_name": "John", "last_name": "Doe", "organization_id": 3},
+            {"op": "contact_add", "first_name": "John", "last_name": "Doe"},
             {"op": "channel_add", "contact_id": -1, "channel_type": "email", "channel_value": "john@wb.org"},
-            {"op": "assignment_add", "contact_id": -1, "project_id": 5, "role_code": "DPM", "notes": "Primary contact for M&E"}
+            {"op": "assignment_add", "contact_id": -1, "project_id": 5, "role_code": "DPM"}
         ])
-        Note: contact_id=-1 means "use ID from previous contact_add in same batch"
-
-    OPERATION GROUPS:
-        Contacts: contact_add, contact_get, contact_list, contact_update, contact_delete, contact_search
-        Channels: channel_add, channel_list, channel_update, channel_delete, channel_set_primary
-        Assignments: assignment_add, assignment_list, assignment_update, assignment_delete
-        Lookup: contact_resolve, contact_resolve_multiple, contact_preferred_channel, project_team
-        Enrichment: suggest_enrichment, suggest_new_contacts, contact_brief
-        Reporting: report, export_contacts, export_project_team
-        System: init, status, role_list, role_get
-
-    OPERATION FIELDS (* = required):
-        contact_add: first_name*, last_name*, organization, organization_type, organization_id,
-                     job_title, department, country, city, timezone, preferred_channel, notes
-        channel_add: contact_id*, channel_type*, channel_value*, channel_label, is_primary, notes
-        assignment_add: contact_id*, project_id*, role_code*, start_date, end_date, workdays_allocated, notes
 
     Examples:
-        contacts(operations=[{"op": "project_team", "project_id": 5}])
+        contacts(operations=[{"op": "contact_list", "country": "Uzbekistan"}])
+        contacts(operations=[{"op": "contact_search", "query": "ADB"}])
+        contacts(operations=[{"op": "contact_get", "id": 27, "include_channels": true}])
         contacts(operations=[{"op": "contact_resolve", "identifier": "Altynbek"}])
-        contacts(operations=[{"op": "contact_add", "first_name": "John", "last_name": "Doe", "organization": "ADB"}])
+        contacts(operations=[{"op": "project_team", "project_id": 1}])
     """
     # Check database for non-system operations
     first_op = operations[0].get("op") if operations else None
