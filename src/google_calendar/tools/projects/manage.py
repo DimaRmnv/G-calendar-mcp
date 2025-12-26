@@ -56,7 +56,12 @@ async def _execute_operation(op: str, p: dict) -> dict:
             context=p.get("context"),
         )
     elif op == "project_get":
-        return await project_get(id=p.get("id"), code=p.get("code"))
+        return await project_get(
+            id=p.get("id"),
+            code=p.get("code"),
+            include_orgs=p.get("include_orgs", False),
+            include_team=p.get("include_team", False)
+        )
     elif op == "project_list":
         projects = await project_list(
             billable_only=p.get("billable_only", False),
@@ -70,11 +75,13 @@ async def _execute_operation(op: str, p: dict) -> dict:
         return await project_update(id=p["id"], **{k: v for k, v in p.items() if k != "id"})
     elif op == "project_delete":
         deleted = await project_delete(id=p["id"])
-        return {"deleted": deleted}
+        return {"deleted": deleted, "id": p["id"]}
     elif op == "project_activate":
-        return await project_update(id=p["id"], is_active=True)
+        result = await project_update(id=p["id"], is_active=True)
+        return {"id": p["id"], "code": result["code"], "is_active": True} if result else None
     elif op == "project_deactivate":
-        return await project_update(id=p["id"], is_active=False)
+        result = await project_update(id=p["id"], is_active=False)
+        return {"id": p["id"], "code": result["code"], "is_active": False} if result else None
 
     # Phases
     elif op == "phase_add":
@@ -84,7 +91,12 @@ async def _execute_operation(op: str, p: dict) -> dict:
             description=p.get("description")
         )
     elif op == "phase_get":
-        return await phase_get(id=p.get("id"), project_id=p.get("project_id"), code=p.get("code"))
+        return await phase_get(
+            id=p.get("id"),
+            project_id=p.get("project_id"),
+            code=p.get("code"),
+            include_tasks=p.get("include_tasks", False)
+        )
     elif op == "phase_list":
         phases = await phase_list(project_id=p.get("project_id"))
         return {"phases": phases}
@@ -92,7 +104,7 @@ async def _execute_operation(op: str, p: dict) -> dict:
         return await phase_update(id=p["id"], **{k: v for k, v in p.items() if k != "id"})
     elif op == "phase_delete":
         deleted = await phase_delete(id=p["id"])
-        return {"deleted": deleted}
+        return {"deleted": deleted, "id": p["id"]}
 
     # Tasks (linked to phases or universal for project)
     elif op == "task_add":
@@ -120,7 +132,7 @@ async def _execute_operation(op: str, p: dict) -> dict:
         return await task_update(id=p["id"], **{k: v for k, v in p.items() if k != "id"})
     elif op == "task_delete":
         deleted = await task_delete(id=p["id"])
-        return {"deleted": deleted}
+        return {"deleted": deleted, "id": p["id"]}
 
     # Organizations (v2)
     elif op == "org_add":
@@ -328,18 +340,26 @@ async def projects(operations: list[dict]) -> dict:
         3. Link expires in 1 hour
         4. File format: Excel (.xlsx) for 1C import
 
-    SKILL REQUIRED: Read projects-management skill for full operations.
-    Read calendar-manager skill for event formatting by project structure.
+    RESPONSE FIELD SETS (token-optimized):
+        PROJECT_COMPACT: {id, code, description, is_billable, is_active, country}
+            → Returned by: project_list, project_update, project_add
+        PROJECT_CALENDAR: {id, code, description, structure_level, my_role, format, phases, universal_tasks}
+            → Returned by: project_list_active
+            → Each phase: {id, code, description, tasks: [{id, code, description}]}
+        PROJECT_FULL: all fields + optional orgs/team arrays
+            → Returned by: project_get(include_orgs=True, include_team=True)
+            → orgs: [{id, name, short_name, org_role, is_lead}]
+            → team: [{contact_id, display_name, role_code, role_name}]
 
-    CRITICAL FOR CALENDAR EVENTS:
-        project_list_active: Returns active projects with structure_level, phases, tasks
-            → structure_level determines event summary format:
-               Level 1: PROJECT * Description
-               Level 2: PROJECT * PHASE * Description
-               Level 3: PROJECT * PHASE * TASK * Description
-            → ALWAYS call before creating work-related calendar events
+    DECISION GUIDE:
+        Need project structure for calendar? → project_list_active
+        Need project details + orgs + team? → project_get(id, include_orgs=True, include_team=True)
+        Need quick project list? → project_list
 
-        projects(operations=[{"op": "project_list_active"}])
+    STRUCTURE LEVELS (for calendar events):
+        Level 1: PROJECT * Description
+        Level 2: PROJECT * PHASE * Description
+        Level 3: PROJECT * PHASE * TASK * Description
 
     Batch operations via operations=[{op, ...params}].
 
@@ -348,19 +368,10 @@ async def projects(operations: list[dict]) -> dict:
         1. Phase-linked: task has phase_id → appears in phase["tasks"]
         2. Universal: task has project_id (phase_id=null) → appears in project["universal_tasks"]
 
-        project_list_active returns:
-        {
-            "phases": [
-                {"code": "A", "tasks": [{"code": "T1", ...}]},  # Phase-linked tasks
-                {"code": "B", "tasks": [...]}
-            ],
-            "universal_tasks": [{"code": "GEN", ...}]  # Universal tasks for all phases
-        }
-
     OPERATION GROUPS:
         Projects: project_add, project_get, project_list, project_list_active, project_update,
                   project_delete, project_activate, project_deactivate
-        Phases: phase_add, phase_get, phase_list, phase_update, phase_delete
+        Phases: phase_add, phase_get (include_tasks), phase_list, phase_update, phase_delete
         Tasks: task_add (phase_id OR project_id), task_get, task_list, task_update, task_delete
         Organizations: org_add, org_get, org_list, org_update, org_delete, org_search
         Project-Org Links: project_org_add/get/list/update/delete, project_orgs, org_projects
@@ -368,23 +379,16 @@ async def projects(operations: list[dict]) -> dict:
         Norms: norm_add, norm_get, norm_list, norm_delete
         Reports: report_status, report_week, report_month, report_custom
             → ALWAYS returns download_url for Excel file (TTL=1h)
-            → CRITICAL: Show download_url to user as clickable link!
             → Response format: {download_url, filename, expires_in, summary}
         Export: cleanup_exports - delete expired files
         System: init, config_get, config_set, config_list, exclusion_*
 
-    ROLES (contact role in project):
-        role_add: {role_code, role_name_en, role_name_ru?, role_category?, description?}
-            role_category: 'consultant', 'client', 'donor', 'partner'
-        role_get: {role_code}
-        role_list: {role_category?} - filter by category
-        role_update: {role_code, role_name_en?, role_name_ru?, role_category?, description?}
-        role_delete: {role_code}
-
     OPERATION FIELDS (* = required):
         project_add: code*, description*, is_billable, is_active, structure_level, full_name,
                      country, sector, start_date, end_date, contract_value, currency, context
+        project_get: id OR code, include_orgs, include_team
         phase_add: project_id*, code*, description
+        phase_get: id OR (project_id, code), include_tasks
         task_add: code*, description, phase_id OR project_id (one required)
         org_add: name*, short_name, name_local, organization_type, parent_org_id,
                  country, city, website, context, relationship_status, first_contact_date, notes
@@ -394,10 +398,10 @@ async def projects(operations: list[dict]) -> dict:
 
     Examples:
         projects(operations=[{"op": "project_list_active"}])
+        projects(operations=[{"op": "project_get", "id": 5, "include_orgs": true, "include_team": true}])
+        projects(operations=[{"op": "phase_get", "id": 10, "include_tasks": true}])
         projects(operations=[{"op": "task_add", "phase_id": 1, "code": "T1"}])  # Phase-linked
         projects(operations=[{"op": "task_add", "project_id": 1, "code": "GEN"}])  # Universal
-        projects(operations=[{"op": "role_list"}])  # List all roles
-        projects(operations=[{"op": "role_add", "role_code": "SA", "role_name_en": "Senior Advisor"}])
     """
     # Check database exists (async)
     db_exists = await database_exists()
