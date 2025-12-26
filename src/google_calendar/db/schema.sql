@@ -435,8 +435,6 @@ SELECT
     c.organization_id,
     o.name as organization_name,
     o.organization_type as org_type,
-    c.organization,  -- Legacy
-    c.organization_type,
     c.job_title,
     c.department,
     c.country,
