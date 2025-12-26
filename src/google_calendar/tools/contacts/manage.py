@@ -270,7 +270,7 @@ async def contacts(operations: list[dict]) -> dict:
 
         contact_resolve          : Find by partial name. Returns: id, display_name, org,
                                    preferred_channel, primary_email, telegram_username
-        contact_resolve_multiple : Batch resolve. Returns: array of above
+        contact_resolve_multiple : Batch resolve. Returns: resolved[], unresolved[], stats{}
 
     PROJECT TEAMS:
 
@@ -303,7 +303,7 @@ async def contacts(operations: list[dict]) -> dict:
                       telegram_username, teams_chat_id, notes, created_at, updated_at
 
         CONTACT_FULL + related: CONTACT_FULL + channels[{type, value, is_primary}]
-                                + projects[{project_code, role_code, role_name}]
+                                + projects[{project_id, project_code, role_code, role_name}]
 
     USAGE PATTERNS:
 
