@@ -82,7 +82,7 @@ async def _report_project_team(project_id: int) -> dict:
                 c.id as contact_id,
                 c.first_name,
                 c.last_name,
-                c.organization,
+                o.name as organization,
                 c.job_title,
                 c.country,
                 cp.role_code,
@@ -94,6 +94,7 @@ async def _report_project_team(project_id: int) -> dict:
                 cp.is_active as assignment_active
             FROM contact_projects cp
             JOIN contacts c ON cp.contact_id = c.id
+            LEFT JOIN organizations o ON c.organization_id = o.id
             JOIN project_roles pr ON cp.role_code = pr.role_code
             WHERE cp.project_id = $1
             ORDER BY pr.role_category, pr.role_name_en, c.last_name
@@ -145,12 +146,15 @@ async def _report_by_organization(organization: str = None, limit: int = 50) -> 
             # Single organization
             contacts_raw = await conn.fetch("""
                 SELECT
-                    id, first_name, last_name, organization,
-                    organization_type, job_title, country,
-                    preferred_channel
-                FROM contacts
-                WHERE organization = $1 OR organization ILIKE $2
-                ORDER BY last_name, first_name
+                    c.id, c.first_name, c.last_name,
+                    o.name as organization,
+                    o.organization_type as org_type,
+                    c.job_title, c.country,
+                    c.preferred_channel
+                FROM contacts c
+                LEFT JOIN organizations o ON c.organization_id = o.id
+                WHERE o.name = $1 OR o.name ILIKE $2
+                ORDER BY c.last_name, c.first_name
                 LIMIT $3
             """, organization, f"%{organization}%", limit)
 
@@ -175,13 +179,13 @@ async def _report_by_organization(organization: str = None, limit: int = 50) -> 
             # All organizations summary
             orgs = await conn.fetch("""
                 SELECT
-                    organization,
-                    organization_type,
+                    o.name as organization,
+                    o.organization_type as org_type,
                     COUNT(*) as contact_count,
-                    STRING_AGG(DISTINCT country, ', ') as countries
-                FROM contacts
-                WHERE organization IS NOT NULL AND organization != ''
-                GROUP BY organization, organization_type
+                    STRING_AGG(DISTINCT c.country, ', ') as countries
+                FROM contacts c
+                JOIN organizations o ON c.organization_id = o.id
+                GROUP BY o.id, o.name, o.organization_type
                 ORDER BY contact_count DESC
                 LIMIT $1
             """, limit)
@@ -213,12 +217,13 @@ async def _report_communication_map(limit: int = 50) -> dict:
             SELECT
                 c.id,
                 c.first_name || ' ' || c.last_name as name,
-                c.organization,
+                o.name as organization,
                 COUNT(cc.id) as channel_count,
                 STRING_AGG(DISTINCT cc.channel_type, ', ') as channel_types
             FROM contacts c
+            LEFT JOIN organizations o ON c.organization_id = o.id
             JOIN contact_channels cc ON c.id = cc.contact_id
-            GROUP BY c.id, c.first_name, c.last_name, c.organization
+            GROUP BY c.id, c.first_name, c.last_name, o.name
             ORDER BY channel_count DESC
             LIMIT $1
         """, limit)
@@ -228,8 +233,9 @@ async def _report_communication_map(limit: int = 50) -> dict:
             SELECT
                 c.id,
                 c.first_name || ' ' || c.last_name as name,
-                c.organization
+                o.name as organization
             FROM contacts c
+            LEFT JOIN organizations o ON c.organization_id = o.id
             LEFT JOIN contact_channels cc ON c.id = cc.contact_id
             WHERE cc.id IS NULL
             LIMIT $1
@@ -266,10 +272,11 @@ async def _report_stale_contacts(days_stale: int = 90, limit: int = 50) -> dict:
             SELECT
                 c.id,
                 c.first_name || ' ' || c.last_name as name,
-                c.organization,
+                o.name as organization,
                 c.updated_at,
                 EXTRACT(DAY FROM (NOW() - c.updated_at)) as days_since_update
             FROM contacts c
+            LEFT JOIN organizations o ON c.organization_id = o.id
             WHERE c.updated_at < $1 OR c.updated_at IS NULL
             ORDER BY c.updated_at ASC NULLS FIRST
             LIMIT $2
@@ -303,10 +310,11 @@ async def _report_summary() -> dict:
 
         # Contacts by organization type
         by_org_type = await conn.fetch("""
-            SELECT organization_type, COUNT(*) as count
-            FROM contacts
-            WHERE organization_type IS NOT NULL
-            GROUP BY organization_type
+            SELECT o.organization_type as org_type, COUNT(*) as count
+            FROM contacts c
+            JOIN organizations o ON c.organization_id = o.id
+            WHERE o.organization_type IS NOT NULL
+            GROUP BY o.organization_type
             ORDER BY count DESC
         """)
 
@@ -354,7 +362,7 @@ async def _report_summary() -> dict:
             'active_assignments': active_assignments,
             'projects_with_teams': projects_with_teams,
             'recent_additions_30d': recent_additions,
-            'by_organization_type': [dict(row) for row in by_org_type],
+            'by_org_type': [dict(row) for row in by_org_type],
             'by_country': [dict(row) for row in by_country],
             'channel_types': [dict(row) for row in channel_types],
             'generated_at': datetime.now().isoformat()
@@ -370,8 +378,8 @@ async def export_contacts_excel(
 
     Args:
         filter_params: Optional filters:
-            - organization: Filter by organization
-            - organization_type: Filter by org type
+            - organization: Filter by organization name
+            - org_type: Filter by organization type
             - country: Filter by country
             - project_id: Filter by project assignment
         output_path: Custom output path (default: ~/Downloads/contacts_export_YYYYMMDD.xlsx)
@@ -399,8 +407,8 @@ async def export_contacts_excel(
                 c.id,
                 c.first_name,
                 c.last_name,
-                c.organization,
-                c.organization_type,
+                o.name as organization,
+                o.organization_type as org_type,
                 c.job_title,
                 c.country,
                 c.preferred_channel,
@@ -408,6 +416,7 @@ async def export_contacts_excel(
                 c.created_at,
                 c.updated_at
             FROM contacts c
+            LEFT JOIN organizations o ON c.organization_id = o.id
         """
 
         if filter_params.get('project_id'):
@@ -417,13 +426,13 @@ async def export_contacts_excel(
             param_idx += 1
 
         if filter_params.get('organization'):
-            conditions.append(f"c.organization ILIKE ${param_idx}")
+            conditions.append(f"o.name ILIKE ${param_idx}")
             params.append(f"%{filter_params['organization']}%")
             param_idx += 1
 
-        if filter_params.get('organization_type'):
-            conditions.append(f"c.organization_type = ${param_idx}")
-            params.append(filter_params['organization_type'])
+        if filter_params.get('org_type'):
+            conditions.append(f"o.organization_type = ${param_idx}")
+            params.append(filter_params['org_type'])
             param_idx += 1
 
         if filter_params.get('country'):
@@ -507,7 +516,7 @@ async def export_contacts_excel(
         ws.cell(row=row_idx, column=2, value=contact.get('first_name'))
         ws.cell(row=row_idx, column=3, value=contact.get('last_name'))
         ws.cell(row=row_idx, column=4, value=contact.get('organization'))
-        ws.cell(row=row_idx, column=5, value=contact.get('organization_type'))
+        ws.cell(row=row_idx, column=5, value=contact.get('org_type'))
         ws.cell(row=row_idx, column=6, value=contact.get('job_title'))
         ws.cell(row=row_idx, column=7, value=contact.get('country'))
         ws.cell(row=row_idx, column=8, value=contact.get('preferred_channel'))
