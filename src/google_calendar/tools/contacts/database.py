@@ -298,13 +298,13 @@ async def contact_list(
             param_idx = 1
 
             if organization:
-                conditions.append(f"organization ILIKE ${param_idx}")
+                conditions.append(f"organization_name ILIKE ${param_idx}")
                 params.append(f"%{organization}%")
                 param_idx += 1
             # Support both organization_type and org_type
             org_type_filter = organization_type or org_type
             if org_type_filter:
-                conditions.append(f"organization_type = ${param_idx}")
+                conditions.append(f"org_type = ${param_idx}")
                 params.append(org_type_filter)
                 param_idx += 1
             if country:
@@ -428,7 +428,7 @@ async def _contact_search_like(query: str, limit: int = 20) -> list[dict]:
             WHERE cf.display_name ILIKE $1
                OR cf.first_name ILIKE $1
                OR cf.last_name ILIKE $1
-               OR cf.organization ILIKE $1
+               OR cf.organization_name ILIKE $1
                OR cf.country ILIKE $1
                OR cf.job_title ILIKE $1
                OR cc.channel_value ILIKE $1
@@ -456,7 +456,7 @@ async def _contact_search_fuzzy(query: str, limit: int = 20, threshold: int = 60
         rows = await conn.fetch("""
             SELECT
                 cf.id, cf.first_name, cf.last_name, cf.display_name,
-                cf.organization_name, cf.organization, cf.job_title, cf.country,
+                cf.organization_name, cf.job_title, cf.country,
                 cf.preferred_channel, cf.primary_email,
                 STRING_AGG(DISTINCT
                     CASE
@@ -473,7 +473,7 @@ async def _contact_search_fuzzy(query: str, limit: int = 20, threshold: int = 60
             LEFT JOIN contact_projects cp ON cf.id = cp.contact_id AND cp.is_active = TRUE
             LEFT JOIN projects p ON cp.project_id = p.id AND p.is_active = TRUE
             GROUP BY cf.id, cf.first_name, cf.last_name, cf.display_name,
-                     cf.organization_name, cf.organization, cf.job_title, cf.country,
+                     cf.organization_name, cf.job_title, cf.country,
                      cf.preferred_channel, cf.primary_email
         """)
 
