@@ -188,14 +188,13 @@ async def get_contact_channels_compact(contact_id: int) -> list[dict]:
 async def get_contact_projects_compact(contact_id: int) -> list[dict]:
     """Get projects for contact in compact format.
 
-    Returns: [{project_id, project_code, role_code, role_name}]
+    Returns: [{project_id, project_code, role_name}]
     """
     async with get_db() as conn:
         rows = await conn.fetch(
             """
-            SELECT cp.project_id, p.code as project_code, cp.role_code, pr.role_name_en as role_name
+            SELECT cp.project_id, p.code as project_code, cp.role_name
             FROM contact_projects cp
-            JOIN project_roles pr ON cp.role_code = pr.role_code
             LEFT JOIN projects p ON cp.project_id = p.id
             WHERE cp.contact_id = $1 AND cp.is_active = TRUE
             ORDER BY p.code
@@ -275,7 +274,7 @@ async def contact_list(
     organization: Optional[str] = None,
     country: Optional[str] = None,
     project_id: Optional[int] = None,
-    role_code: Optional[str] = None,
+    role_name: Optional[str] = None,
     preferred_channel: Optional[str] = None,
     org_type: Optional[str] = None,
     active_only: bool = True
@@ -284,10 +283,10 @@ async def contact_list(
     async with get_db() as conn:
         if project_id is not None:
             # Use project team view (already optimized)
-            if role_code:
+            if role_name:
                 rows = await conn.fetch(
-                    "SELECT * FROM v_project_team WHERE project_id = $1 AND role_code = $2",
-                    project_id, role_code
+                    "SELECT * FROM v_project_team WHERE project_id = $1 AND project_role ILIKE $2",
+                    project_id, f"%{role_name}%"
                 )
             else:
                 rows = await conn.fetch(
@@ -682,17 +681,13 @@ async def channel_set_primary(id: int) -> Optional[dict]:
 async def assignment_add(
     contact_id: int,
     project_id: int,
-    role_code: str,
+    role_name: str,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     workdays_allocated: Optional[int] = None,
     notes: Optional[str] = None
 ) -> dict:
     """Add a project assignment to a contact. Returns compact format."""
-    role = await role_get(role_code)
-    if not role:
-        raise ValueError(f"Invalid role_code: {role_code}")
-
     async with get_db() as conn:
         # Validate project exists and get code
         project = await conn.fetchrow("SELECT id, code FROM projects WHERE id = $1", project_id)
@@ -702,11 +697,11 @@ async def assignment_add(
         row = await conn.fetchrow(
             """
             INSERT INTO contact_projects
-            (contact_id, project_id, role_code, start_date, end_date, workdays_allocated, notes)
+            (contact_id, project_id, role_name, start_date, end_date, workdays_allocated, notes)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING id
             """,
-            contact_id, project_id, role_code.upper(), start_date, end_date, workdays_allocated, notes
+            contact_id, project_id, role_name, start_date, end_date, workdays_allocated, notes
         )
         # Return compact
         return {
@@ -714,7 +709,7 @@ async def assignment_add(
             "contact_id": contact_id,
             "project_id": project_id,
             "project_code": project['code'],
-            "role_code": role_code.upper()
+            "role_name": role_name
         }
 
 
@@ -728,7 +723,7 @@ async def assignment_get(id: int) -> Optional[dict]:
 async def assignment_list(
     contact_id: Optional[int] = None,
     project_id: Optional[int] = None,
-    role_code: Optional[str] = None,
+    role_name: Optional[str] = None,
     active_only: bool = True
 ) -> list[dict]:
     """List project assignments with optional filters. Returns compact format."""
@@ -745,15 +740,15 @@ async def assignment_list(
             conditions.append(f"project_id = ${param_idx}")
             params.append(project_id)
             param_idx += 1
-        if role_code:
-            conditions.append(f"role_code = ${param_idx}")
-            params.append(role_code.upper())
+        if role_name:
+            conditions.append(f"role_name ILIKE ${param_idx}")
+            params.append(f"%{role_name}%")
             param_idx += 1
         if active_only:
             conditions.append("is_active = TRUE")
 
         # Return compact fields only
-        query = "SELECT id, project_id, project_code, role_code, role_name_en as role_name, is_active FROM v_contact_projects"
+        query = "SELECT id, project_id, project_code, role_name, is_active FROM v_contact_projects"
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
 
@@ -763,17 +758,11 @@ async def assignment_list(
 
 async def assignment_update(id: int, **kwargs) -> Optional[dict]:
     """Update assignment by id."""
-    allowed_fields = {'role_code', 'start_date', 'end_date', 'is_active', 'workdays_allocated', 'notes'}
+    allowed_fields = {'role_name', 'start_date', 'end_date', 'is_active', 'workdays_allocated', 'notes'}
     updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
 
     if not updates:
         return await assignment_get(id)
-
-    if 'role_code' in updates:
-        updates['role_code'] = updates['role_code'].upper()
-        role = await role_get(updates['role_code'])
-        if not role:
-            raise ValueError(f"Invalid role_code: {updates['role_code']}")
 
     set_parts = []
     values = []

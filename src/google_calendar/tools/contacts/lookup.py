@@ -90,13 +90,11 @@ async def _get_contact_with_channels(contact_id: int) -> Optional[dict]:
                 cp.project_id,
                 p.code as project_code,
                 p.description as project_name,
-                cp.role_code,
-                pr.role_name_en as role_name,
+                cp.role_name,
                 cp.start_date,
                 cp.end_date,
                 cp.workdays_allocated
             FROM contact_projects cp
-            JOIN project_roles pr ON cp.role_code = pr.role_code
             LEFT JOIN projects p ON cp.project_id = p.id
             WHERE cp.contact_id = $1 AND cp.is_active = TRUE
             ORDER BY cp.start_date DESC
@@ -193,7 +191,7 @@ async def resolve_contact(
         context: Optional context for disambiguation:
             - project_id: Prefer contacts from this project
             - organization: Prefer contacts from this org
-            - role_code: Prefer contacts with this role
+            - role_name: Prefer contacts with this role
 
     Returns:
         CONTACT_RESOLVE format: {id, display_name, organization_name,
@@ -243,7 +241,7 @@ async def resolve_contact(
     if context and len(results) > 1:
         project_id = context.get('project_id')
         organization = context.get('organization')
-        role_code = context.get('role_code')
+        role_name = context.get('role_name')
 
         for r in results:
             contact = await _get_contact_with_channels(r['id'])
@@ -261,9 +259,9 @@ async def resolve_contact(
                 return _to_contact_resolve(contact, 'name_with_org_context')
 
             # Check role match
-            if role_code:
-                roles = [p['role_code'] for p in contact.get('projects', [])]
-                if role_code in roles:
+            if role_name:
+                roles = [p['role_name'] for p in contact.get('projects', [])]
+                if any(role_name.lower() in r.lower() for r in roles if r):
                     return _to_contact_resolve(contact, 'name_with_role_context')
 
     # Return best match (highest score)

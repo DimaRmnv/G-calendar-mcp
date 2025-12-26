@@ -81,7 +81,7 @@ async def _execute_operation(op: str, p: dict) -> dict:
         contacts = await contact_list(
             organization=p.get("organization"),
             country=p.get("country"), project_id=p.get("project_id"),
-            role_code=p.get("role_code"), preferred_channel=p.get("preferred_channel"),
+            role_name=p.get("role_name"), preferred_channel=p.get("preferred_channel"),
             org_type=p.get("org_type"), active_only=p.get("active_only", True)
         )
         return {"contacts": contacts, "total": len(contacts)}
@@ -131,7 +131,7 @@ async def _execute_operation(op: str, p: dict) -> dict:
     # Assignments
     elif op == "assignment_add":
         return await assignment_add(
-            contact_id=p["contact_id"], project_id=p["project_id"], role_code=p["role_code"],
+            contact_id=p["contact_id"], project_id=p["project_id"], role_name=p["role_name"],
             start_date=p.get("start_date"), end_date=p.get("end_date"),
             workdays_allocated=p.get("workdays_allocated"), notes=p.get("notes")
         )
@@ -141,7 +141,7 @@ async def _execute_operation(op: str, p: dict) -> dict:
     elif op == "assignment_list":
         assignments = await assignment_list(
             contact_id=p.get("contact_id"), project_id=p.get("project_id"),
-            role_code=p.get("role_code"), active_only=p.get("active_only", True)
+            role_name=p.get("role_name"), active_only=p.get("active_only", True)
         )
         return {"assignments": assignments}
     elif op == "assignment_update":
@@ -287,7 +287,7 @@ async def contacts(operations: list[dict]) -> dict:
     ASSIGNMENTS (contact ↔ project roles):
 
         assignment_list   : Contact's project assignments (compact). Requires: contact_id
-        assignment_add    : Assign to project. Requires: contact_id, project_id, role_code
+        assignment_add    : Assign to project. Requires: contact_id, project_id, role_name
         assignment_update : Update. Requires: id
         assignment_delete : Remove. Requires: id. Returns: {deleted, id}
 
@@ -302,7 +302,7 @@ async def contacts(operations: list[dict]) -> dict:
                       telegram_username, teams_chat_id, notes, created_at, updated_at
 
         CONTACT_FULL + related: CONTACT_FULL + channels[{type, value, is_primary}]
-                                + projects[{project_id, project_code, role_code, role_name}]
+                                + projects[{project_id, project_code, role_name}]
 
     USAGE PATTERNS:
 
@@ -318,7 +318,7 @@ async def contacts(operations: list[dict]) -> dict:
         contacts(operations=[
             {"op": "contact_add", "first_name": "John", "last_name": "Doe"},
             {"op": "channel_add", "contact_id": -1, "channel_type": "email", "channel_value": "john@wb.org"},
-            {"op": "assignment_add", "contact_id": -1, "project_id": 5, "role_code": "DPM"}
+            {"op": "assignment_add", "contact_id": -1, "project_id": 5, "role_name": "Deputy Project Manager"}
         ])
 
     Examples:

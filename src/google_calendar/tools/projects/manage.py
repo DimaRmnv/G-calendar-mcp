@@ -415,7 +415,7 @@ async def projects(operations: list[dict]) -> dict:
 
         PROJECT_FULL: All table fields including timestamps.
             + include_orgs: orgs[{id, name, short_name, org_role, is_lead}]
-            + include_team: team[{contact_id, display_name, role_code, role_name}]
+            + include_team: team[{contact_id, display_name, role_name}]
 
         ORG_COMPACT: id, name, short_name, organization_type, country, relationship_status
 

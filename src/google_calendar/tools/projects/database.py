@@ -102,7 +102,7 @@ async def project_get(
         id: Project ID
         code: Project code
         include_orgs: If True, include orgs: [{id, name, short_name, org_role, is_lead}]
-        include_team: If True, include team: [{contact_id, display_name, role_code, role_name}]
+        include_team: If True, include team: [{contact_id, display_name, role_name}]
 
     Returns:
         PROJECT_FULL with optional orgs/team arrays
@@ -172,11 +172,9 @@ async def project_list(billable_only: bool = False, active_only: bool = False, c
             # Full data with my_role for project_list_active
             query = f"""
                 SELECT p.*,
-                       cp.role_code as my_role,
-                       pr.role_name_en as my_role_name
+                       cp.role_name as my_role
                 FROM projects p
                 LEFT JOIN contact_projects cp ON cp.project_id = p.id AND cp.contact_id = 1 AND cp.is_active = TRUE
-                LEFT JOIN project_roles pr ON pr.role_code = cp.role_code
                 {where_clause}
                 ORDER BY p.code
             """
@@ -738,19 +736,18 @@ async def get_task_by_project_code(project_code: str, task_code: str) -> Optiona
 
 
 async def get_my_role(project_id: int) -> Optional[str]:
-    """Get role of contact_id=1 (owner) in project. Returns role_name_en or None."""
+    """Get role of contact_id=1 (owner) in project. Returns role_name or None."""
     async with get_db() as conn:
         row = await conn.fetchrow(
             """
-            SELECT pr.role_name_en
-            FROM contact_projects cp
-            JOIN project_roles pr ON pr.role_code = cp.role_code
-            WHERE cp.project_id = $1 AND cp.contact_id = 1 AND cp.is_active = TRUE
+            SELECT role_name
+            FROM contact_projects
+            WHERE project_id = $1 AND contact_id = 1 AND is_active = TRUE
             LIMIT 1
             """,
             project_id
         )
-        return row["role_name_en"] if row else None
+        return row["role_name"] if row else None
 
 
 # Aliases for backward compatibility with parser
@@ -1135,18 +1132,16 @@ async def get_project_organizations_compact(project_id: int) -> list[dict]:
 async def get_project_team_compact(project_id: int) -> list[dict]:
     """Get project team in compact format.
 
-    Returns: [{contact_id, display_name, role_code, role_name}]
+    Returns: [{contact_id, display_name, role_name}]
     """
     async with get_db() as conn:
         rows = await conn.fetch(
             """
             SELECT c.id as contact_id,
                    CONCAT(c.first_name, ' ', c.last_name) as display_name,
-                   cp.role_code,
-                   pr.role_name_en as role_name
+                   cp.role_name
             FROM contacts c
             JOIN contact_projects cp ON c.id = cp.contact_id
-            LEFT JOIN project_roles pr ON pr.role_code = cp.role_code
             WHERE cp.project_id = $1 AND cp.is_active = TRUE
             ORDER BY c.last_name
             """,

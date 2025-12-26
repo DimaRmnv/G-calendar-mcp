@@ -85,9 +85,7 @@ async def _report_project_team(project_id: int) -> dict:
                 o.name as organization,
                 c.job_title,
                 c.country,
-                cp.role_code,
-                pr.role_name_en as role_name,
-                pr.role_category,
+                cp.role_name,
                 cp.start_date,
                 cp.end_date,
                 cp.workdays_allocated,
@@ -95,9 +93,8 @@ async def _report_project_team(project_id: int) -> dict:
             FROM contact_projects cp
             JOIN contacts c ON cp.contact_id = c.id
             LEFT JOIN organizations o ON c.organization_id = o.id
-            JOIN project_roles pr ON cp.role_code = pr.role_code
             WHERE cp.project_id = $1
-            ORDER BY pr.role_category, pr.role_name_en, c.last_name
+            ORDER BY cp.role_name, c.last_name
         """, project_id)
 
         members = []
@@ -471,13 +468,12 @@ async def export_contacts_excel(
         # Get project assignments
         for c in contacts:
             projects = await conn.fetch("""
-                SELECT p.code, pr.role_name_en
+                SELECT p.code, cp.role_name
                 FROM contact_projects cp
                 JOIN projects p ON cp.project_id = p.id
-                JOIN project_roles pr ON cp.role_code = pr.role_code
                 WHERE cp.contact_id = $1 AND cp.is_active = TRUE
             """, c['id'])
-            c['projects'] = ', '.join([f"{p['code']} ({p['role_name_en']})" for p in projects])
+            c['projects'] = ', '.join([f"{p['code']} ({p['role_name']})" for p in projects])
 
     # Create Excel workbook
     wb = openpyxl.Workbook()
