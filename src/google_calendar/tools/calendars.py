@@ -243,17 +243,21 @@ def _get_settings(account: Optional[str]) -> dict:
 
 
 def _set_timezone(timezone: str, account: Optional[str]) -> dict:
-    """Set calendar timezone."""
-    service = get_service(account)
+    """Set timezone for primary calendar of specified account.
 
-    result = service.settings().patch(
-        setting="timezone",
-        body={"value": timezone}
-    ).execute()
+    If account is not specified, defaults to 'work'.
+    """
+    if account is None:
+        account = "work"
 
+    cal = api_update_calendar(
+        calendar_id="primary",
+        timezone=timezone,
+        account=account,
+    )
     return {
-        "timezone": result.get("value"),
-        "updated": True
+        "timezone": cal.get("timeZone"),
+        "updated": True,
     }
 
 
