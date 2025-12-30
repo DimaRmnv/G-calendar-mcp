@@ -243,15 +243,13 @@ def _get_settings(account: Optional[str]) -> dict:
 
 
 def _set_timezone(timezone: str, account: Optional[str]) -> dict:
-    """Set timezone for primary calendar of specified account.
+    """Set timezone for primary calendar.
 
-    If account is not specified, defaults to 'work'.
-
-    Note: Finds primary calendar ID via list_calendars (calendar with primary=True).
-    The 'primary' alias doesn't work with calendars().patch() API.
+    If account not specified, uses default_account from config.
+    Finds calendar ID via list_calendars (calendar with primary=True).
     """
     if account is None:
-        account = "work"
+        account = get_default_account()
 
     # Find primary calendar ID (the "primary" alias doesn't work with calendars API)
     calendars_list = api_list_calendars(account=account)
