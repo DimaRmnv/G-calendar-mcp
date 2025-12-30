@@ -246,12 +246,22 @@ def _set_timezone(timezone: str, account: Optional[str]) -> dict:
     """Set timezone for primary calendar of specified account.
 
     If account is not specified, defaults to 'work'.
+
+    Note: Finds primary calendar ID via list_calendars (calendar with primary=True).
+    The 'primary' alias doesn't work with calendars().patch() API.
     """
     if account is None:
         account = "work"
 
+    # Find primary calendar ID (the "primary" alias doesn't work with calendars API)
+    calendars_list = api_list_calendars(account=account)
+    primary_cal = next((c for c in calendars_list if c.get("primary")), None)
+
+    if not primary_cal:
+        raise ValueError(f"No primary calendar found for account '{account}'")
+
     cal = api_update_calendar(
-        calendar_id="primary",
+        calendar_id=primary_cal["id"],
         timezone=timezone,
         account=account,
     )
