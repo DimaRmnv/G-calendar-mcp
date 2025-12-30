@@ -70,14 +70,14 @@ TOOLS (7):
 TIME FORMAT: '2024-12-15T10:00:00' (timed) or '2024-12-15' (all-day)"""
 )
 
-# Register all 7 tools
-mcp.tool(calendars)
-mcp.tool(availability)
-mcp.tool(events)
-mcp.tool(attendees)
-mcp.tool(weekly_brief)
-mcp.tool(projects)
-mcp.tool(contacts)
+# Register all 7 tools (fastmcp 1.0 requires calling the decorator)
+mcp.tool()(calendars)
+mcp.tool()(availability)
+mcp.tool()(events)
+mcp.tool()(attendees)
+mcp.tool()(weekly_brief)
+mcp.tool()(projects)
+mcp.tool()(contacts)
 
 
 def create_http_app():
@@ -88,6 +88,7 @@ def create_http_app():
     - OAuth callback endpoints
     - API key authentication middleware
     - MCP endpoints
+    - TokenExpiredError/AuthRequiredError handling with auth_url
     """
     from fastapi import FastAPI, Request
     from fastapi.responses import JSONResponse
@@ -95,6 +96,7 @@ def create_http_app():
     from google_calendar.settings import settings
     from google_calendar.oauth_server import oauth_router, validate_access_token
     from google_calendar.export_router import export_router
+    from google_calendar.api.client import TokenExpiredError, AuthRequiredError, RateLimitError
 
     # Get MCP app first to access its lifespan
     mcp_app = mcp.http_app()
@@ -105,6 +107,34 @@ def create_http_app():
         version="0.2.0",
         lifespan=mcp_app.lifespan  # Required for FastMCP session management
     )
+
+    # =========================================================================
+    # Exception handlers for auto-reauth
+    # =========================================================================
+
+    @app.exception_handler(TokenExpiredError)
+    async def token_expired_handler(request: Request, exc: TokenExpiredError):
+        """Return structured JSON with auth_url for token expiration."""
+        return JSONResponse(
+            status_code=401,
+            content=exc.to_dict()
+        )
+
+    @app.exception_handler(AuthRequiredError)
+    async def auth_required_handler(request: Request, exc: AuthRequiredError):
+        """Return structured JSON with auth_url for auth failures."""
+        return JSONResponse(
+            status_code=401,
+            content=exc.to_dict()
+        )
+
+    @app.exception_handler(RateLimitError)
+    async def rate_limit_handler(request: Request, exc: RateLimitError):
+        """Return 429 for rate limit errors."""
+        return JSONResponse(
+            status_code=429,
+            content={"error": "rate_limit", "message": str(exc)}
+        )
 
     # Add export router (no auth - UUID is the token)
     app.include_router(export_router)
