@@ -35,6 +35,33 @@ _active_tokens: dict[str, float] = {}
 # Token lifetime: 1 hour
 TOKEN_LIFETIME_SECONDS = 3600
 
+# Pending flow TTL: 15 minutes (reasonable for OAuth flow completion)
+PENDING_FLOW_TTL_SECONDS = 900
+
+# Maximum pending flows to prevent memory exhaustion
+MAX_PENDING_FLOWS = 100
+
+
+def _cleanup_expired_flows() -> int:
+    """Remove expired pending flows. Returns count of removed entries."""
+    now = time.time()
+    expired = [
+        state for state, data in _pending_flows.items()
+        if now - data.get("created_at", 0) > PENDING_FLOW_TTL_SECONDS
+    ]
+    for state in expired:
+        del _pending_flows[state]
+    return len(expired)
+
+
+def _cleanup_expired_tokens() -> int:
+    """Remove expired tokens. Returns count of removed entries."""
+    now = time.time()
+    expired = [token for token, expiry in _active_tokens.items() if now > expiry]
+    for token in expired:
+        del _active_tokens[token]
+    return len(expired)
+
 
 def generate_access_token(client_id: str) -> str:
     """Generate a secure access token."""
@@ -102,10 +129,19 @@ async def start_oauth(
         login_hint=email_hint
     )
 
+    # Cleanup expired flows and check limit
+    _cleanup_expired_flows()
+    if len(_pending_flows) >= MAX_PENDING_FLOWS:
+        raise HTTPException(
+            status_code=503,
+            detail="Too many pending OAuth flows. Please try again later."
+        )
+
     _pending_flows[state] = {
         "account": account,
         "flow": flow,
-        "email_hint": email_hint
+        "email_hint": email_hint,
+        "created_at": time.time()
     }
 
     return {
@@ -150,6 +186,25 @@ async def oauth_callback(
             <body style="font-family: system-ui; padding: 40px; text-align: center;">
                 <h1>Invalid or Expired Request</h1>
                 <p>The authorization session has expired or is invalid.</p>
+                <p>Please start the authorization process again.</p>
+            </body>
+            </html>
+            """,
+            status_code=400
+        )
+
+    # Check if flow has expired (TTL validation)
+    pending_data = _pending_flows.get(state)
+    if pending_data and time.time() - pending_data.get("created_at", 0) > PENDING_FLOW_TTL_SECONDS:
+        _pending_flows.pop(state, None)
+        return HTMLResponse(
+            """
+            <!DOCTYPE html>
+            <html>
+            <head><title>Session Expired</title></head>
+            <body style="font-family: system-ui; padding: 40px; text-align: center;">
+                <h1>Session Expired</h1>
+                <p>Your authorization session has expired (15 minute limit).</p>
                 <p>Please start the authorization process again.</p>
             </body>
             </html>
