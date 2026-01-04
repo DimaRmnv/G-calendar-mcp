@@ -43,11 +43,11 @@ services:
     networks:
       - mcp-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 5m
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 30s
 
 networks:
   mcp-network:
