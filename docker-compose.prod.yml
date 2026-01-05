@@ -19,8 +19,8 @@ services:
       - GCAL_MCP_API_KEY=${GCAL_MCP_API_KEY}
 
       # OAuth configuration
-      - GCAL_MCP_OAUTH_REDIRECT_URI=https://mcp-serv.duckdns.org/mcp/calendar/oauth/callback
-      - GCAL_MCP_SERVER_BASE_URL=https://mcp-serv.duckdns.org/mcp/calendar
+      - GCAL_MCP_OAUTH_REDIRECT_URI=${GCAL_MCP_OAUTH_REDIRECT_URI}
+      - GCAL_MCP_SERVER_BASE_URL=${GCAL_MCP_SERVER_BASE_URL}
       - GCAL_MCP_OAUTH_CLIENT_ID=${GCAL_MCP_OAUTH_CLIENT_ID}
       - GCAL_MCP_OAUTH_CLIENT_SECRET=${GCAL_MCP_OAUTH_CLIENT_SECRET}
 
