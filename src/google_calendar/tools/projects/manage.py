@@ -33,6 +33,7 @@ from google_calendar.tools.projects.database import (
 )
 from google_calendar.db.connection import get_db
 from google_calendar.tools.projects.report import generate_report
+from google_calendar.api.client import handle_auth_errors
 
 
 async def _execute_operation(op: str, p: dict) -> dict:
@@ -334,6 +335,7 @@ async def _execute_operation(op: str, p: dict) -> dict:
         raise ValueError(f"Unknown operation: {op}")
 
 
+@handle_auth_errors
 async def projects(operations: list[dict]) -> dict:
     """Projects, phases, tasks, and organizations management.
 

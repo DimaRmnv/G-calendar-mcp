@@ -9,9 +9,10 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from google_calendar.api.events import list_events, format_event_summary
-from google_calendar.api.client import get_user_timezone
+from google_calendar.api.client import get_user_timezone, handle_auth_errors
 
 
+@handle_auth_errors
 def weekly_brief(
     start_date: Optional[str] = None,
     calendar_id: str = "primary",

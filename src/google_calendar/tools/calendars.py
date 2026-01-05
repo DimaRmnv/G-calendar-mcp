@@ -16,10 +16,11 @@ from google_calendar.api.calendars import (
     get_calendar_acl,
     get_calendar_colors,
 )
-from google_calendar.api.client import get_service
+from google_calendar.api.client import get_service, handle_auth_errors
 from google_calendar.utils.config import list_accounts as config_list_accounts, get_default_account
 
 
+@handle_auth_errors
 def calendars(
     action: Literal[
         "list", "get", "create", "update", "delete",

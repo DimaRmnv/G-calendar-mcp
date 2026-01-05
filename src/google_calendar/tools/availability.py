@@ -10,9 +10,10 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from google_calendar.api.freebusy import get_freebusy as api_get_freebusy
-from google_calendar.api.client import get_user_timezone
+from google_calendar.api.client import get_user_timezone, handle_auth_errors
 
 
+@handle_auth_errors
 def availability(
     action: Literal["query", "find_slots"] = "query",
     time_min: Optional[str] = None,

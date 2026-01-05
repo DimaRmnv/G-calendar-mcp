@@ -13,7 +13,9 @@ import json
 import os
 import logging
 import time
-from typing import Optional
+import inspect
+from functools import wraps
+from typing import Optional, Callable
 from pathlib import Path
 
 from google.auth.transport.requests import Request
@@ -109,6 +111,47 @@ class CalendarAPIError(Exception):
 class RateLimitError(CalendarAPIError):
     """Rate limit exceeded - retry later."""
     pass
+
+
+# ============================================================================
+# Decorator for MCP Tools
+# ============================================================================
+
+def handle_auth_errors(func: Callable) -> Callable:
+    """
+    Decorator to catch auth errors and return them as structured dict.
+
+    Use on MCP tools to ensure auth errors return auth_url for reauthorization
+    instead of raising exceptions that get converted to plain text errors.
+
+    Supports both sync and async functions.
+
+    Returns dict with error info:
+        {
+            "error": "auth_required",
+            "message": "...",
+            "auth_url": "https://...",
+            "account": "personal"
+        }
+    """
+    if inspect.iscoroutinefunction(func):
+        @wraps(func)
+        async def async_wrapper(*args, **kwargs):
+            try:
+                return await func(*args, **kwargs)
+            except (AuthRequiredError, TokenExpiredError) as e:
+                logger.warning(f"Auth error in {func.__name__}: {e}")
+                return e.to_dict()
+        return async_wrapper
+    else:
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except (AuthRequiredError, TokenExpiredError) as e:
+                logger.warning(f"Auth error in {func.__name__}: {e}")
+                return e.to_dict()
+        return wrapper
 
 
 # ============================================================================

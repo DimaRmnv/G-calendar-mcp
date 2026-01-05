@@ -20,9 +20,10 @@ from google_calendar.api.events import (
     is_recurring_instance,
     move_event as api_move_event,
 )
-from google_calendar.api.client import get_user_timezone
+from google_calendar.api.client import get_user_timezone, handle_auth_errors
 
 
+@handle_auth_errors
 def events(
     action: Literal["list", "create", "get", "update", "delete", "search", "batch"] = "list",
     # Common parameters

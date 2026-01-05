@@ -8,9 +8,10 @@ Replaces: manage_attendees, respond_to_event
 from typing import Optional, Literal
 
 from google_calendar.api.events import get_event, update_event
-from google_calendar.api.client import get_authorized_email
+from google_calendar.api.client import get_authorized_email, handle_auth_errors
 
 
+@handle_auth_errors
 def attendees(
     action: Literal["list", "add", "remove", "resend", "respond"],
     event_id: str,
