@@ -117,23 +117,80 @@ class RateLimitError(CalendarAPIError):
 # Decorator for MCP Tools
 # ============================================================================
 
+def _generate_google_oauth_url(account: str) -> Optional[str]:
+    """
+    Generate Google OAuth authorization URL directly.
+
+    Returns the Google OAuth URL that user can click to authorize.
+    Also stores the pending flow state for callback handling.
+    Returns None if OAuth is not configured or limit reached.
+    """
+    try:
+        from google_auth_oauthlib.flow import Flow
+        from google_calendar.oauth_state import generate_state, store_pending_flow
+
+        oauth_client = load_oauth_client()
+        if not oauth_client:
+            return None
+
+        if not settings.oauth_redirect_uri:
+            return None
+
+        account_info = get_account(account)
+        email_hint = account_info.get("email") if account_info else None
+
+        flow = Flow.from_client_config(
+            oauth_client,
+            scopes=SCOPES,
+            redirect_uri=settings.oauth_redirect_uri
+        )
+
+        state = generate_state()
+
+        auth_url, _ = flow.authorization_url(
+            access_type="offline",
+            include_granted_scopes="false",
+            prompt="consent",
+            state=state,
+            login_hint=email_hint
+        )
+
+        # Store pending flow for callback
+        if not store_pending_flow(state, account, flow, email_hint):
+            logger.warning(f"Too many pending OAuth flows, cannot start new one for '{account}'")
+            return None
+
+        return auth_url
+    except Exception as e:
+        logger.error(f"Failed to generate OAuth URL for '{account}': {e}")
+        return None
+
+
 def handle_auth_errors(func: Callable) -> Callable:
     """
-    Decorator to catch auth errors and return them as structured dict.
+    Decorator to catch auth errors and return clickable OAuth URL.
 
-    Use on MCP tools to ensure auth errors return auth_url for reauthorization
-    instead of raising exceptions that get converted to plain text errors.
+    When auth fails, generates Google OAuth URL directly and returns
+    a user-friendly message with the clickable link.
 
     Supports both sync and async functions.
-
-    Returns dict with error info:
-        {
-            "error": "auth_required",
-            "message": "...",
-            "auth_url": "https://...",
-            "account": "personal"
-        }
     """
+    def _build_auth_response(e: Exception) -> dict:
+        """Build auth error response with clickable OAuth URL."""
+        account = e.account
+        google_oauth_url = _generate_google_oauth_url(account)
+
+        if google_oauth_url:
+            return {
+                "error": "auth_required",
+                "message": f"Authorization required for '{account}'. Click to authorize: {google_oauth_url}",
+                "auth_url": google_oauth_url,
+                "account": account,
+            }
+        else:
+            # Fallback to server OAuth start URL if direct generation fails
+            return e.to_dict()
+
     if inspect.iscoroutinefunction(func):
         @wraps(func)
         async def async_wrapper(*args, **kwargs):
@@ -141,7 +198,7 @@ def handle_auth_errors(func: Callable) -> Callable:
                 return await func(*args, **kwargs)
             except (AuthRequiredError, TokenExpiredError) as e:
                 logger.warning(f"Auth error in {func.__name__}: {e}")
-                return e.to_dict()
+                return _build_auth_response(e)
         return async_wrapper
     else:
         @wraps(func)
@@ -150,7 +207,7 @@ def handle_auth_errors(func: Callable) -> Callable:
                 return func(*args, **kwargs)
             except (AuthRequiredError, TokenExpiredError) as e:
                 logger.warning(f"Auth error in {func.__name__}: {e}")
-                return e.to_dict()
+                return _build_auth_response(e)
         return wrapper
 
 

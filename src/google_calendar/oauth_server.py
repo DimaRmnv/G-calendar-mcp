@@ -8,8 +8,8 @@ Endpoints:
 - GET /oauth/status/{account} - Check authorization status
 """
 
-import secrets
 import hashlib
+import secrets
 import time
 from typing import Optional
 
@@ -22,12 +22,17 @@ from google_auth_oauthlib.flow import Flow
 from google_calendar.settings import settings
 from google_calendar.utils.config import load_oauth_client, get_account
 from google_calendar.api.client import SCOPES, save_credentials, get_credentials
+from google_calendar.oauth_state import (
+    generate_state,
+    store_pending_flow,
+    get_pending_flow,
+    get_pending_flow_data,
+    cleanup_expired_flows,
+    PENDING_FLOW_TTL_SECONDS,
+)
 
 
 oauth_router = APIRouter(prefix="/oauth", tags=["oauth"])
-
-# In-memory state store for pending OAuth flows
-_pending_flows: dict[str, dict] = {}
 
 # In-memory token store for OAuth 2.0 Client Credentials
 _active_tokens: dict[str, float] = {}
@@ -35,23 +40,11 @@ _active_tokens: dict[str, float] = {}
 # Token lifetime: 1 hour
 TOKEN_LIFETIME_SECONDS = 3600
 
-# Pending flow TTL: 15 minutes (reasonable for OAuth flow completion)
-PENDING_FLOW_TTL_SECONDS = 900
-
-# Maximum pending flows to prevent memory exhaustion
-MAX_PENDING_FLOWS = 100
-
 
 def _cleanup_expired_flows() -> int:
     """Remove expired pending flows. Returns count of removed entries."""
-    now = time.time()
-    expired = [
-        state for state, data in _pending_flows.items()
-        if now - data.get("created_at", 0) > PENDING_FLOW_TTL_SECONDS
-    ]
-    for state in expired:
-        del _pending_flows[state]
-    return len(expired)
+    cleanup_expired_flows()
+    return 0  # Count not tracked in shared module
 
 
 def _cleanup_expired_tokens() -> int:
@@ -116,7 +109,7 @@ async def start_oauth(
         redirect_uri=settings.oauth_redirect_uri
     )
 
-    state = secrets.token_urlsafe(32)
+    state = generate_state()
 
     if email_hint is None and account_info.get("email"):
         email_hint = account_info["email"]
@@ -129,20 +122,12 @@ async def start_oauth(
         login_hint=email_hint
     )
 
-    # Cleanup expired flows and check limit
-    _cleanup_expired_flows()
-    if len(_pending_flows) >= MAX_PENDING_FLOWS:
+    # Store pending flow (handles cleanup and limit check)
+    if not store_pending_flow(state, account, flow, email_hint):
         raise HTTPException(
             status_code=503,
             detail="Too many pending OAuth flows. Please try again later."
         )
-
-    _pending_flows[state] = {
-        "account": account,
-        "flow": flow,
-        "email_hint": email_hint,
-        "created_at": time.time()
-    }
 
     return {
         "auth_url": auth_url,
@@ -177,7 +162,8 @@ async def oauth_callback(
             status_code=400
         )
 
-    if not state or state not in _pending_flows:
+    pending_data = get_pending_flow_data(state) if state else None
+    if not state or not pending_data:
         return HTMLResponse(
             """
             <!DOCTYPE html>
@@ -194,9 +180,8 @@ async def oauth_callback(
         )
 
     # Check if flow has expired (TTL validation)
-    pending_data = _pending_flows.get(state)
-    if pending_data and time.time() - pending_data.get("created_at", 0) > PENDING_FLOW_TTL_SECONDS:
-        _pending_flows.pop(state, None)
+    if time.time() - pending_data.get("created_at", 0) > PENDING_FLOW_TTL_SECONDS:
+        get_pending_flow(state)  # Remove expired flow
         return HTMLResponse(
             """
             <!DOCTYPE html>
@@ -227,7 +212,7 @@ async def oauth_callback(
             status_code=400
         )
 
-    pending = _pending_flows.pop(state)
+    pending = get_pending_flow(state)
     flow = pending["flow"]
     account = pending["account"]
 
