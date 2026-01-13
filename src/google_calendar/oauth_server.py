@@ -14,7 +14,7 @@ import time
 from typing import Optional
 
 from fastapi import APIRouter, Query, HTTPException, Form
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
@@ -129,12 +129,8 @@ async def start_oauth(
             detail="Too many pending OAuth flows. Please try again later."
         )
 
-    return {
-        "auth_url": auth_url,
-        "state": state,
-        "account": account,
-        "message": f"Open this URL to authorize account '{account}': {auth_url}"
-    }
+    # Redirect to Google OAuth directly
+    return RedirectResponse(url=auth_url, status_code=302)
 
 
 @oauth_router.get("/callback")
