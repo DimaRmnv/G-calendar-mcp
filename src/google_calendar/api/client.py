@@ -169,47 +169,14 @@ def _generate_google_oauth_url(account: str) -> Optional[str]:
 
 def handle_auth_errors(func: Callable) -> Callable:
     """
-    Decorator to catch auth errors and return clickable OAuth URL.
-
-    When auth fails, generates Google OAuth URL directly and returns
-    a user-friendly message with the clickable link.
+    Decorator to catch auth errors and return them as structured dict.
 
     Handles:
     - AuthRequiredError, TokenExpiredError (our custom exceptions)
     - RefreshError (from google-auth library when token refresh fails)
 
-    Supports both sync and async functions.
+    Returns dict with auth_url pointing to /oauth/start/{account}
     """
-    def _build_auth_response(e: Exception, account: Optional[str] = None) -> dict:
-        """Build auth error response with clickable OAuth URL."""
-        # Get account from exception or parameter
-        if hasattr(e, 'account'):
-            account = e.account
-        if not account:
-            account = get_default_account() or "default"
-
-        google_oauth_url = _generate_google_oauth_url(account)
-
-        if google_oauth_url:
-            return {
-                "error": "auth_required",
-                "message": f"Authorization required for '{account}'. Click to authorize: {google_oauth_url}",
-                "auth_url": google_oauth_url,
-                "account": account,
-            }
-        else:
-            # Fallback to server OAuth start URL if direct generation fails
-            if hasattr(e, 'to_dict'):
-                return e.to_dict()
-            # For RefreshError without to_dict
-            auth_url = settings.get_auth_start_url(account)
-            return {
-                "error": "auth_required",
-                "message": f"Token refresh failed for '{account}': {str(e)[:200]}",
-                "auth_url": auth_url,
-                "account": account,
-            }
-
     if inspect.iscoroutinefunction(func):
         @wraps(func)
         async def async_wrapper(*args, **kwargs):
@@ -217,12 +184,18 @@ def handle_auth_errors(func: Callable) -> Callable:
                 return await func(*args, **kwargs)
             except (AuthRequiredError, TokenExpiredError) as e:
                 logger.warning(f"Auth error in {func.__name__}: {e}")
-                return _build_auth_response(e)
+                return e.to_dict()
             except RefreshError as e:
                 # Token refresh failed during API call (from google-auth library)
-                account = kwargs.get('account')
+                account = kwargs.get('account') or get_default_account() or "default"
                 logger.warning(f"RefreshError in {func.__name__} for '{account}': {e}")
-                return _build_auth_response(e, account)
+                auth_url = settings.get_auth_start_url(account)
+                return {
+                    "error": "auth_required",
+                    "message": f"Token refresh failed for '{account}'. Authorize here: {auth_url}",
+                    "auth_url": auth_url,
+                    "account": account,
+                }
         return async_wrapper
     else:
         @wraps(func)
@@ -231,12 +204,18 @@ def handle_auth_errors(func: Callable) -> Callable:
                 return func(*args, **kwargs)
             except (AuthRequiredError, TokenExpiredError) as e:
                 logger.warning(f"Auth error in {func.__name__}: {e}")
-                return _build_auth_response(e)
+                return e.to_dict()
             except RefreshError as e:
                 # Token refresh failed during API call (from google-auth library)
-                account = kwargs.get('account')
+                account = kwargs.get('account') or get_default_account() or "default"
                 logger.warning(f"RefreshError in {func.__name__} for '{account}': {e}")
-                return _build_auth_response(e, account)
+                auth_url = settings.get_auth_start_url(account)
+                return {
+                    "error": "auth_required",
+                    "message": f"Token refresh failed for '{account}'. Authorize here: {auth_url}",
+                    "auth_url": auth_url,
+                    "account": account,
+                }
         return wrapper
 
 
