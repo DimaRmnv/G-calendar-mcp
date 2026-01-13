@@ -19,6 +19,7 @@ from typing import Optional, Callable
 from pathlib import Path
 
 from google.auth.transport.requests import Request
+from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build, Resource
@@ -173,11 +174,20 @@ def handle_auth_errors(func: Callable) -> Callable:
     When auth fails, generates Google OAuth URL directly and returns
     a user-friendly message with the clickable link.
 
+    Handles:
+    - AuthRequiredError, TokenExpiredError (our custom exceptions)
+    - RefreshError (from google-auth library when token refresh fails)
+
     Supports both sync and async functions.
     """
-    def _build_auth_response(e: Exception) -> dict:
+    def _build_auth_response(e: Exception, account: Optional[str] = None) -> dict:
         """Build auth error response with clickable OAuth URL."""
-        account = e.account
+        # Get account from exception or parameter
+        if hasattr(e, 'account'):
+            account = e.account
+        if not account:
+            account = get_default_account() or "default"
+
         google_oauth_url = _generate_google_oauth_url(account)
 
         if google_oauth_url:
@@ -189,7 +199,16 @@ def handle_auth_errors(func: Callable) -> Callable:
             }
         else:
             # Fallback to server OAuth start URL if direct generation fails
-            return e.to_dict()
+            if hasattr(e, 'to_dict'):
+                return e.to_dict()
+            # For RefreshError without to_dict
+            auth_url = settings.get_auth_start_url(account)
+            return {
+                "error": "auth_required",
+                "message": f"Token refresh failed for '{account}': {str(e)[:200]}",
+                "auth_url": auth_url,
+                "account": account,
+            }
 
     if inspect.iscoroutinefunction(func):
         @wraps(func)
@@ -199,6 +218,11 @@ def handle_auth_errors(func: Callable) -> Callable:
             except (AuthRequiredError, TokenExpiredError) as e:
                 logger.warning(f"Auth error in {func.__name__}: {e}")
                 return _build_auth_response(e)
+            except RefreshError as e:
+                # Token refresh failed during API call (from google-auth library)
+                account = kwargs.get('account')
+                logger.warning(f"RefreshError in {func.__name__} for '{account}': {e}")
+                return _build_auth_response(e, account)
         return async_wrapper
     else:
         @wraps(func)
@@ -208,6 +232,11 @@ def handle_auth_errors(func: Callable) -> Callable:
             except (AuthRequiredError, TokenExpiredError) as e:
                 logger.warning(f"Auth error in {func.__name__}: {e}")
                 return _build_auth_response(e)
+            except RefreshError as e:
+                # Token refresh failed during API call (from google-auth library)
+                account = kwargs.get('account')
+                logger.warning(f"RefreshError in {func.__name__} for '{account}': {e}")
+                return _build_auth_response(e, account)
         return wrapper
 
 
@@ -299,6 +328,18 @@ def execute_with_retry(request, account: str, max_retries: int = 3):
 
             # Other errors - don't retry
             raise
+
+        except RefreshError as e:
+            # Token refresh failed during API call - need reauth
+            clear_service_cache(account)
+            auth_url = settings.get_auth_start_url(account)
+            error_msg = str(e)
+            logger.error(f"RefreshError for '{account}': {error_msg}")
+            raise AuthRequiredError(
+                account=account,
+                auth_url=auth_url,
+                reason=f"Token refresh failed: {error_msg[:200]}"
+            )
 
         except Exception as e:
             # Network errors and other exceptions - retry
