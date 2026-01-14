@@ -245,8 +245,8 @@ def _create_excel_file(
     ws = wb.active
     ws.title = f"{period_type}-to-date"
 
-    # Headers (10 columns for 1C import)
-    headers = ["Date", "Fact hours", "Project", "Project phase", "Location",
+    # Headers (11 columns for 1C import)
+    headers = ["Date", "Fact hours", "Project", "Project phase", "Task", "Location",
                "Description", "Per diems", "Title", "Comment", "Errors"]
     for col, header in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col, value=header)
@@ -259,26 +259,24 @@ def _create_excel_file(
         if entry.is_excluded:
             continue
 
-        # Build description: TASK * Description or just description
-        if entry.task_code and entry.description:
-            desc = f"{entry.task_code} * {entry.description}"
-        else:
-            desc = entry.description or entry.raw_summary[:100]
+        # Description without task code (task is now separate column)
+        desc = entry.description or entry.raw_summary[:100]
 
         ws.cell(row=row, column=1, value=entry.date.strftime("%d.%m.%Y"))
         ws.cell(row=row, column=2, value=entry.duration_hours)
         ws.cell(row=row, column=3, value=entry.project_code or "")
         ws.cell(row=row, column=4, value=entry.phase_code or "")
-        ws.cell(row=row, column=5, value=base_location)
-        ws.cell(row=row, column=6, value=desc)
-        ws.cell(row=row, column=7, value="")  # Per diems
-        ws.cell(row=row, column=8, value=entry.my_role or "")  # Title
-        ws.cell(row=row, column=9, value="")  # Comment
-        ws.cell(row=row, column=10, value="; ".join(entry.errors) if entry.errors else "")
+        ws.cell(row=row, column=5, value=entry.task_code or "")
+        ws.cell(row=row, column=6, value=base_location)
+        ws.cell(row=row, column=7, value=desc)
+        ws.cell(row=row, column=8, value="")  # Per diems
+        ws.cell(row=row, column=9, value=entry.my_role or "")  # Title
+        ws.cell(row=row, column=10, value="")  # Comment
+        ws.cell(row=row, column=11, value="; ".join(entry.errors) if entry.errors else "")
         row += 1
 
     # Column widths (optimized for 1C)
-    widths = [12, 10, 12, 15, 12, 80, 10, 30, 15, 30]
+    widths = [12, 10, 12, 15, 10, 12, 80, 10, 30, 15, 30]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[chr(64 + i)].width = w
 

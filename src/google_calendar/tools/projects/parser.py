@@ -109,6 +109,17 @@ async def parse_summary(summary: str) -> ParsedEvent:
     if summary.rstrip().endswith('##'):
         result.description = summary  # Keep full for reference
 
+    # Determine required structure level by number of parts (asterisks + 1)
+    # 2 parts (1 asterisk):  Level 1 - PROJECT * Description
+    # 3 parts (2 asterisks): Level 2 - PROJECT * PHASE * Description
+    # 4+ parts (3+ asterisks): Level 3 - PROJECT * PHASE * TASK * Description
+    if len(parts) >= 4:
+        required_level = 3
+    elif len(parts) == 3:
+        required_level = 2
+    else:
+        required_level = 1
+
     # Look up ALL projects with this code (may be multiple with different levels)
     projects = await get_projects_by_code(potential_project)
 
@@ -118,16 +129,20 @@ async def parse_summary(summary: str) -> ParsedEvent:
         result.errors.append(f"Project code '{potential_project}' not found")
         return result
 
-    # Try each project variant (sorted by structure_level DESC)
-    # Return first successful parse
-    for project in projects:
-        attempt = await _try_parse_with_project(parts, project)
-        if attempt.is_valid:
-            return attempt
+    # Find project with matching structure level
+    project = next((p for p in projects if p["structure_level"] == required_level), None)
 
-    # No variant matched successfully - return last attempt with errors
-    # But try to provide best possible result
-    return await _try_parse_with_project(parts, projects[0])
+    if not project:
+        # No project with required level - show available levels
+        available_levels = [p["structure_level"] for p in projects]
+        result.description = summary
+        result.errors.append(
+            f"Project '{potential_project}' doesn't support level {required_level} "
+            f"(available: {available_levels}). Check asterisk count."
+        )
+        return result
+
+    return await _try_parse_with_project(parts, project)
 
 
 async def _try_parse_with_project(parts: list[str], project: dict) -> ParsedEvent:
