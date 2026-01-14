@@ -136,8 +136,8 @@ def create_http_app():
             content={"error": "rate_limit", "message": str(exc)}
         )
 
-    # Add export router (no auth - UUID is the token)
-    app.include_router(export_router)
+    # Add export router under /mcp/calendar (no auth - UUID is the token)
+    app.include_router(export_router, prefix="/mcp/calendar")
 
     # Add OAuth router under /mcp/calendar/oauth
     app.include_router(oauth_router, prefix="/mcp/calendar")
@@ -152,7 +152,7 @@ def create_http_app():
             return await call_next(request)
 
         # Skip for export downloads (UUID is the token)
-        if request.url.path.startswith("/export/"):
+        if "/export/" in request.url.path:
             return await call_next(request)
 
         # Skip for health check
