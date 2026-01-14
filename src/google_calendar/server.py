@@ -93,19 +93,39 @@ def create_http_app():
     from fastapi import FastAPI, Request
     from fastapi.responses import JSONResponse
 
+    import asyncio
+    from contextlib import asynccontextmanager
+
     from google_calendar.settings import settings
     from google_calendar.oauth_server import oauth_router, validate_access_token
-    from google_calendar.export_router import export_router
+    from google_calendar.export_router import export_router, cleanup_expired_reports
     from google_calendar.api.client import TokenExpiredError, AuthRequiredError, RateLimitError
 
     # Get MCP app first to access its lifespan
     mcp_app = mcp.http_app()
 
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        """Combined lifespan: MCP session management + cleanup task."""
+        # Start cleanup task
+        cleanup_task = asyncio.create_task(cleanup_expired_reports())
+
+        # Delegate to MCP lifespan
+        async with mcp_app.lifespan(app):
+            yield
+
+        # Cancel cleanup on shutdown
+        cleanup_task.cancel()
+        try:
+            await cleanup_task
+        except asyncio.CancelledError:
+            pass
+
     app = FastAPI(
         title="Google Calendar MCP",
         description="MCP server for Google Calendar integration",
         version="0.2.0",
-        lifespan=mcp_app.lifespan  # Required for FastMCP session management
+        lifespan=lifespan
     )
 
     # =========================================================================
