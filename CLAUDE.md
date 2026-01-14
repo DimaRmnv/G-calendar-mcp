@@ -88,6 +88,19 @@ Endpoint `/export/{uuid}`:
 - Возвращает 404 если файл не найден
 - Возвращает 410 если файл истёк
 
+### Cleanup expired files
+
+Background task в `export_router.py`:
+- Запускается каждые 15 минут
+- Удаляет файлы из `/data/reports/` у которых `expires_at < NOW()`
+- Помечает записи в БД как `is_deleted = TRUE`
+- Логирует количество удалённых файлов
+
+Проверить работу:
+```bash
+ssh root@157.173.109.132 "docker logs google-calendar-mcp 2>&1 | grep -i cleanup"
+```
+
 ## Testing Locally
 
 ```bash
