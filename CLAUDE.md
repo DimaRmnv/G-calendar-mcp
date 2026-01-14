@@ -77,6 +77,33 @@ src/google_calendar/
         └── report.py      # Contact reports, Excel export
 ```
 
+## Event Parser (Time Tracking)
+
+Парсер в `parser.py` определяет структуру события по количеству звёздочек:
+
+| Звёздочки | Части | Уровень | Формат |
+|-----------|-------|---------|--------|
+| 1 | 2 | Level 1 | `PROJECT * Description` |
+| 2 | 3 | Level 2 | `PROJECT * PHASE * Description` |
+| 3+ | 4+ | Level 3 | `PROJECT * PHASE * TASK * Description` |
+
+**Логика:**
+1. Считает количество частей (split по `*`)
+2. Определяет требуемый `structure_level`
+3. Ищет проект с этим уровнем в БД
+4. Если проект не поддерживает уровень — ошибка
+
+**Пример ошибки:**
+```
+"CAYIB * 0.1 * Meeting" → 3 части → Level 2
+Проект CAYIB только Level 3 → Ошибка: "doesn't support level 2"
+```
+
+**Колонки Excel отчёта (11):**
+```
+Date | Fact hours | Project | Project phase | Task | Location | Description | Per diems | Title | Comment | Errors
+```
+
 ## Reports & Export
 
 Отчёты генерируются в `/data/reports/{uuid}.xlsx` с TTL 1 час.
