@@ -21,7 +21,7 @@ from google_auth_oauthlib.flow import Flow
 
 from google_calendar.settings import settings
 from google_calendar.utils.config import load_oauth_client, get_account
-from google_calendar.api.client import SCOPES, save_credentials, get_credentials
+from google_calendar.api.client import SCOPES, save_credentials, get_credentials, clear_service_cache
 from google_calendar.oauth_state import (
     generate_state,
     store_pending_flow,
@@ -216,6 +216,7 @@ async def oauth_callback(
         flow.fetch_token(code=code)
         creds = flow.credentials
         save_credentials(account, creds)
+        clear_service_cache(account)  # Clear cached service to use new credentials
 
         return HTMLResponse(
             f"""
