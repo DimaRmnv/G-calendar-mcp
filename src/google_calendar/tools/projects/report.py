@@ -15,8 +15,10 @@ from google_calendar.tools.projects.database import (
     config_get,
     norm_get,
 )
+from google.auth.exceptions import RefreshError
+
 from google_calendar.tools.projects.parser import parse_events_batch, TimeEntry
-from google_calendar.api.client import get_service
+from google_calendar.api.client import get_service, AuthRequiredError, TokenExpiredError
 from google_calendar.db.connection import get_db
 
 
@@ -323,6 +325,8 @@ async def generate_report(
     # Get service
     try:
         service = get_service(account)
+    except (AuthRequiredError, TokenExpiredError, RefreshError):
+        raise
     except Exception as e:
         return {"error": f"Failed to get calendar service: {str(e)}"}
 
@@ -342,6 +346,8 @@ async def generate_report(
 
         try:
             events = _fetch_events(service, calendar_id, month_start, end)
+        except (AuthRequiredError, TokenExpiredError, RefreshError):
+            raise
         except Exception as e:
             return {"error": f"Failed to fetch events: {str(e)}"}
 
@@ -431,6 +437,8 @@ async def generate_report(
 
     try:
         events = _fetch_events(service, calendar_id, start, end)
+    except (AuthRequiredError, TokenExpiredError, RefreshError):
+        raise
     except Exception as e:
         return {"error": f"Failed to fetch events: {str(e)}"}
 

@@ -31,9 +31,11 @@ from google_calendar.tools.projects.database import (
     project_org_add, project_org_get, project_org_list, project_org_update, project_org_delete,
     get_project_organizations, get_organization_projects,
 )
+from google.auth.exceptions import RefreshError
+
 from google_calendar.db.connection import get_db
 from google_calendar.tools.projects.report import generate_report
-from google_calendar.api.client import handle_auth_errors
+from google_calendar.api.client import handle_auth_errors, AuthRequiredError, TokenExpiredError
 
 
 async def _execute_operation(op: str, p: dict) -> dict:
@@ -479,6 +481,8 @@ async def projects(operations: list[dict]) -> dict:
             result = await _execute_operation(op, op_data)
             results.append({"index": i, "op": op, "result": result})
             success_count += 1
+        except (AuthRequiredError, TokenExpiredError, RefreshError):
+            raise
         except ValueError as e:
             results.append({"index": i, "op": op, "error": str(e)})
             error_count += 1
