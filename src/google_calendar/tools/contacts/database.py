@@ -18,6 +18,7 @@ except ImportError:
     FUZZY_AVAILABLE = False
 
 from google_calendar.db.connection import get_db, check_db_exists
+from google_calendar.db.dates import coerce_date, coerce_date_fields
 
 
 # Valid values for CHECK constraints
@@ -130,6 +131,7 @@ async def contact_add(
     if preferred_channel not in PREFERRED_CHANNELS:
         raise ValueError(f"Invalid preferred_channel. Must be one of: {PREFERRED_CHANNELS}")
 
+    last_interaction_date = coerce_date(last_interaction_date)
     async with get_db() as conn:
         row = await conn.fetchrow(
             """
@@ -348,6 +350,7 @@ async def contact_update(id: int, **kwargs) -> Optional[dict]:
 
     if 'preferred_channel' in updates and updates['preferred_channel'] not in PREFERRED_CHANNELS:
         raise ValueError(f"Invalid preferred_channel. Must be one of: {PREFERRED_CHANNELS}")
+    coerce_date_fields(updates)
 
     async with get_db() as conn:
         if updates:
@@ -688,6 +691,8 @@ async def assignment_add(
     notes: Optional[str] = None
 ) -> dict:
     """Add a project assignment to a contact. Returns compact format."""
+    start_date = coerce_date(start_date)
+    end_date = coerce_date(end_date)
     async with get_db() as conn:
         # Validate project exists and get code
         project = await conn.fetchrow("SELECT id, code FROM projects WHERE id = $1", project_id)
@@ -763,6 +768,8 @@ async def assignment_update(id: int, **kwargs) -> Optional[dict]:
 
     if not updates:
         return await assignment_get(id)
+
+    coerce_date_fields(updates)
 
     set_parts = []
     values = []

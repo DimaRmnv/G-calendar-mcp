@@ -13,6 +13,7 @@ Schema version 2:
 from typing import Optional
 
 from google_calendar.db.connection import get_db, check_db_exists
+from google_calendar.db.dates import coerce_date, coerce_date_fields
 
 
 SCHEMA_VERSION = 2
@@ -70,6 +71,8 @@ async def project_add(
     context: Optional[str] = None,
 ) -> dict:
     """Create a new project. Returns compact response: {id, code, description, structure_level, is_active}."""
+    start_date = coerce_date(start_date)
+    end_date = coerce_date(end_date)
     async with get_db() as conn:
         row = await conn.fetchrow(
             """
@@ -200,6 +203,7 @@ async def project_update(id: int, **kwargs) -> Optional[dict]:
 
     if "code" in updates:
         updates["code"] = updates["code"].upper()
+    coerce_date_fields(updates)
 
     set_parts = []
     values = []
@@ -786,6 +790,7 @@ async def org_add(
     if relationship_status not in RELATIONSHIP_STATUSES:
         raise ValueError(f"Invalid relationship_status. Must be one of: {RELATIONSHIP_STATUSES}")
 
+    first_contact_date = coerce_date(first_contact_date)
     async with get_db() as conn:
         row = await conn.fetchrow(
             """
@@ -912,6 +917,7 @@ async def org_update(id: int, **kwargs) -> Optional[dict]:
         raise ValueError(f"Invalid organization_type. Must be one of: {ORGANIZATION_TYPES}")
     if "relationship_status" in updates and updates["relationship_status"] not in RELATIONSHIP_STATUSES:
         raise ValueError(f"Invalid relationship_status. Must be one of: {RELATIONSHIP_STATUSES}")
+    coerce_date_fields(updates)
 
     set_parts = []
     values = []
@@ -978,6 +984,8 @@ async def project_org_add(
     notes: Optional[str] = None,
 ) -> dict:
     """Link an organization to a project with a specific role (free text)."""
+    start_date = coerce_date(start_date)
+    end_date = coerce_date(end_date)
     async with get_db() as conn:
         row = await conn.fetchrow(
             """
@@ -1052,6 +1060,8 @@ async def project_org_update(id: int, **kwargs) -> Optional[dict]:
 
     if not updates:
         return await project_org_get(id=id)
+
+    coerce_date_fields(updates)
 
     set_parts = []
     values = []
