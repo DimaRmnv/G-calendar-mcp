@@ -10,12 +10,50 @@ Schema version 2:
 - Extended project fields (full_name, country, sector, dates, contract info)
 """
 
+from datetime import date, datetime
 from typing import Optional
 
 from google_calendar.db.connection import get_db, check_db_exists
 
 
 SCHEMA_VERSION = 2
+
+# Columns of SQL type DATE across the projects schema. asyncpg binds DATE
+# parameters by calling .toordinal() on them, so a bare ISO string raises
+# "'str' object has no attribute 'toordinal'". Incoming values must be coerced
+# to datetime.date before they reach a query.
+DATE_FIELDS = ("start_date", "end_date", "first_contact_date")
+
+
+def _coerce_date(value):
+    """Coerce an incoming date value to datetime.date for asyncpg DATE columns.
+
+    Accepts None, datetime.date/datetime, or an ISO string in either
+    '2026-05-01' or '2026-05-01T00:00:00' form. Empty strings become None.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        try:
+            return date.fromisoformat(s)
+        except ValueError:
+            # Fall back for values carrying a time component (e.g. '...T00:00:00').
+            return datetime.fromisoformat(s).date()
+    raise TypeError(f"Unsupported value for DATE column: {value!r}")
+
+
+def _coerce_date_fields(updates: dict) -> None:
+    """Coerce any DATE-typed keys in an update dict in place."""
+    for key in DATE_FIELDS:
+        if key in updates:
+            updates[key] = _coerce_date(updates[key])
 
 # Organization types for organizations table
 ORGANIZATION_TYPES = (
@@ -70,6 +108,8 @@ async def project_add(
     context: Optional[str] = None,
 ) -> dict:
     """Create a new project. Returns compact response: {id, code, description, structure_level, is_active}."""
+    start_date = _coerce_date(start_date)
+    end_date = _coerce_date(end_date)
     async with get_db() as conn:
         row = await conn.fetchrow(
             """
@@ -200,6 +240,7 @@ async def project_update(id: int, **kwargs) -> Optional[dict]:
 
     if "code" in updates:
         updates["code"] = updates["code"].upper()
+    _coerce_date_fields(updates)
 
     set_parts = []
     values = []
@@ -786,6 +827,7 @@ async def org_add(
     if relationship_status not in RELATIONSHIP_STATUSES:
         raise ValueError(f"Invalid relationship_status. Must be one of: {RELATIONSHIP_STATUSES}")
 
+    first_contact_date = _coerce_date(first_contact_date)
     async with get_db() as conn:
         row = await conn.fetchrow(
             """
@@ -912,6 +954,7 @@ async def org_update(id: int, **kwargs) -> Optional[dict]:
         raise ValueError(f"Invalid organization_type. Must be one of: {ORGANIZATION_TYPES}")
     if "relationship_status" in updates and updates["relationship_status"] not in RELATIONSHIP_STATUSES:
         raise ValueError(f"Invalid relationship_status. Must be one of: {RELATIONSHIP_STATUSES}")
+    _coerce_date_fields(updates)
 
     set_parts = []
     values = []
@@ -978,6 +1021,8 @@ async def project_org_add(
     notes: Optional[str] = None,
 ) -> dict:
     """Link an organization to a project with a specific role (free text)."""
+    start_date = _coerce_date(start_date)
+    end_date = _coerce_date(end_date)
     async with get_db() as conn:
         row = await conn.fetchrow(
             """
@@ -1052,6 +1097,8 @@ async def project_org_update(id: int, **kwargs) -> Optional[dict]:
 
     if not updates:
         return await project_org_get(id=id)
+
+    _coerce_date_fields(updates)
 
     set_parts = []
     values = []
