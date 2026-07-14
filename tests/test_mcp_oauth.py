@@ -240,6 +240,27 @@ def test_authorize_get_renders_consent(client):
     assert challenge in r.text  # carried through as a hidden field
 
 
+def test_consent_csp_does_not_block_cross_origin_redirect(client):
+    # A `form-action` directive in the consent page CSP is enforced by browsers
+    # against the redirect target of the form submission, which would silently
+    # block the cross-origin 302 back to the OAuth client (claude.ai) and hang
+    # the whole flow. It must NOT be present.
+    _, challenge = _pkce_pair()
+    r = client.get(
+        "/mcp/calendar/oauth/authorize",
+        params={
+            "response_type": "code",
+            "client_id": "c1",
+            "redirect_uri": REDIRECT,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+        },
+    )
+    assert r.status_code == 200
+    assert "form-action" not in r.headers.get("content-security-policy", "")
+    assert r.headers.get("x-frame-options") == "DENY"  # clickjacking guard stays
+
+
 def test_authorize_get_rejects_bad_redirect(client):
     _, challenge = _pkce_pair()
     r = client.get(

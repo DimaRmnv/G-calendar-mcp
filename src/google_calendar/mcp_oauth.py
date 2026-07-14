@@ -482,10 +482,14 @@ def _consent_page(params: dict[str, Any], error: str = "") -> HTMLResponse:
         status_code=status,
         headers={
             "X-Frame-Options": "DENY",
-            "Content-Security-Policy": (
-                "default-src 'none'; style-src 'unsafe-inline'; "
-                "form-action 'self'; frame-ancestors 'none'"
-            ),
+            # NOTE: no `form-action` directive. Browsers enforce form-action
+            # against the redirect target of a form submission, and this consent
+            # form legitimately redirects cross-origin to the OAuth client's
+            # callback (e.g. claude.ai/api/mcp/auth_callback). `form-action 'self'`
+            # would silently block that redirect and hang the OAuth flow.
+            # redirect_uri is validated server-side against an allow-list, so
+            # omitting form-action here is safe.
+            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'",
             "Referrer-Policy": "no-referrer",
         },
     )
