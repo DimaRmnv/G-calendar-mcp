@@ -191,6 +191,17 @@ def test_asm_endpoint(client):
     assert body["registration_endpoint"].endswith("/oauth/register")
 
 
+def test_openid_configuration_endpoint(client):
+    # Claude's connector discovers via OIDC (openid-configuration), not RFC 8414.
+    r = client.get("/mcp/calendar/.well-known/openid-configuration")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["issuer"] == BASE_URL
+    assert body["code_challenge_methods_supported"] == ["S256"]
+    assert body["registration_endpoint"].endswith("/oauth/register")
+    assert body["authorization_endpoint"].endswith("/oauth/authorize")
+
+
 def test_dynamic_client_registration(client):
     r = client.post(
         "/mcp/calendar/oauth/register",

@@ -361,6 +361,21 @@ async def authorization_server_metadata_endpoint():
         return _server_error(exc)
 
 
+@well_known_router.get("/.well-known/openid-configuration")
+async def openid_configuration_endpoint():
+    # Claude's connector performs OIDC discovery (openid-configuration) rather than
+    # RFC 8414 (oauth-authorization-server), so serve the same authorization-server
+    # metadata here or discovery 404s and registration fails. We are an OAuth 2.1
+    # AS, not a full OIDC provider (no id_token / jwks), but the authorization-code
+    # + PKCE flow only needs these endpoints.
+    try:
+        metadata = authorization_server_metadata()
+        metadata["subject_types_supported"] = ["public"]
+        return JSONResponse(metadata)
+    except OAuthConfigError as exc:
+        return _server_error(exc)
+
+
 @mcp_oauth_router.post("/register")
 async def register_client(request: Request):
     """Dynamic Client Registration (RFC 7591). Public client, PKCE required."""
