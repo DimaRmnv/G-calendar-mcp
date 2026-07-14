@@ -16,15 +16,15 @@ Tools (7 total):
 
 from fastmcp import FastMCP
 
+from google_calendar.tools.attendees import attendees
+from google_calendar.tools.availability import availability
+
 # Unified tools (consolidated from 16 to 7)
 from google_calendar.tools.calendars import calendars
-from google_calendar.tools.availability import availability
+from google_calendar.tools.contacts import contacts
 from google_calendar.tools.events import events
-from google_calendar.tools.attendees import attendees
 from google_calendar.tools.intelligence import weekly_brief
 from google_calendar.tools.projects import projects
-from google_calendar.tools.contacts import contacts
-
 
 # Create server
 mcp = FastMCP(
@@ -90,16 +90,22 @@ def create_http_app():
     - MCP endpoints
     - TokenExpiredError/AuthRequiredError handling with auth_url
     """
-    from fastapi import FastAPI, Request
-    from fastapi.responses import JSONResponse
-
     import asyncio
     from contextlib import asynccontextmanager
 
+    from fastapi import FastAPI, Request
+    from fastapi.responses import JSONResponse
+
+    from google_calendar.api.client import AuthRequiredError, RateLimitError, TokenExpiredError
+    from google_calendar.export_router import cleanup_expired_reports, export_router
+    from google_calendar.mcp_oauth import (
+        mcp_oauth_router,
+        verify_bearer_token,
+        well_known_router,
+        www_authenticate_value,
+    )
+    from google_calendar.oauth_server import oauth_router
     from google_calendar.settings import settings
-    from google_calendar.oauth_server import oauth_router, validate_access_token
-    from google_calendar.export_router import export_router, cleanup_expired_reports
-    from google_calendar.api.client import TokenExpiredError, AuthRequiredError, RateLimitError
 
     # Get MCP app first to access its lifespan
     mcp_app = mcp.http_app()
@@ -159,8 +165,13 @@ def create_http_app():
     # Add export router under /mcp/calendar (no auth - UUID is the token)
     app.include_router(export_router, prefix="/mcp/calendar")
 
-    # Add OAuth router under /mcp/calendar/oauth
+    # Add Google OAuth router under /mcp/calendar/oauth
     app.include_router(oauth_router, prefix="/mcp/calendar")
+
+    # OAuth 2.1 Authorization Server for MCP clients (Claude custom connectors):
+    # discovery metadata + dynamic client registration + authorize/token.
+    app.include_router(well_known_router, prefix="/mcp/calendar")
+    app.include_router(mcp_oauth_router, prefix="/mcp/calendar")
 
     # Authentication middleware
     @app.middleware("http")
@@ -183,6 +194,10 @@ def create_http_app():
         if request.url.path in ["/docs", "/redoc", "/openapi.json"]:
             return await call_next(request)
 
+        # Skip for OAuth discovery metadata (must be publicly reachable)
+        if "/.well-known/" in request.url.path:
+            return await call_next(request)
+
         # Check if any authentication is configured
         has_api_key = bool(settings.api_key)
         has_oauth = bool(settings.oauth_client_id and settings.oauth_client_secret)
@@ -199,12 +214,13 @@ def create_http_app():
             # Check API key first
             if has_api_key and token == settings.api_key:
                 return await call_next(request)
-            # Check OAuth token
-            if validate_access_token(token):
+            # Check OAuth 2.1 access token (JWT issued by our authorization server)
+            if verify_bearer_token(token):
                 return await call_next(request)
             return JSONResponse(
                 {"error": "Unauthorized", "message": "Invalid or expired access token"},
-                status_code=401
+                status_code=401,
+                headers={"WWW-Authenticate": www_authenticate_value("invalid_token")},
             )
 
         # Try Basic auth (client_id:client_secret)
@@ -243,7 +259,8 @@ def create_http_app():
 
         return JSONResponse(
             {"error": "Unauthorized", "message": "Invalid or missing authentication"},
-            status_code=401
+            status_code=401,
+            headers={"WWW-Authenticate": www_authenticate_value()},
         )
 
     # Health check endpoints
