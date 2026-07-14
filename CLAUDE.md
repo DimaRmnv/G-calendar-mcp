@@ -136,7 +136,34 @@ python -m google_calendar.server
 
 # Проверка синтаксиса
 python -m py_compile src/google_calendar/server.py
+
+# Прогнать тесты (нужны extras: pip install -e ".[cloud,dev]")
+pytest tests/ -v
 ```
+
+## MCP Connector Auth (OAuth 2.1)
+
+Claude при добавлении custom-коннектора **принудительно** выполняет OAuth 2.1
+Dynamic Client Registration к remote MCP-серверу (варианта «no auth» в UI больше
+нет). Поэтому сервер выступает как OAuth 2.1 Authorization Server + Protected
+Resource. Реализация — `src/google_calendar/mcp_oauth.py`.
+
+Эндпоинты (публичный префикс `https://viredge.com/calendar/mcp`):
+- `GET  /.well-known/oauth-protected-resource` — RFC 9728 metadata
+- `GET  /.well-known/oauth-authorization-server` — RFC 8414 metadata
+- `POST /oauth/register` — Dynamic Client Registration (RFC 7591)
+- `GET/POST /oauth/authorize` — экран согласия (вводится `GCAL_MCP_API_KEY`)
+- `POST /oauth/token` — grants: `authorization_code` / `refresh_token` / `client_credentials`
+
+Особенности:
+- Токены и коды — подписанные JWT (HS256); ключ выводится из `GCAL_MCP_API_KEY`,
+  поэтому они переживают рестарт контейнера и не требуют БД. Ротация API-ключа
+  инвалидирует все выданные токены.
+- Обязательный PKCE (S256). `redirect_uri` ограничен доменами `claude.ai`,
+  `claude.com`, `anthropic.com` (+ поддомены) и loopback (Claude Desktop).
+- Требуется корректный `GCAL_MCP_SERVER_BASE_URL` — иначе метаданные отдают 500.
+- Аутентификация по API-ключу (заголовок/квери) продолжает работать **параллельно**
+  с OAuth, ничего не ломая для существующих клиентов.
 
 ## Common Issues
 
@@ -148,3 +175,10 @@ python -m py_compile src/google_calendar/server.py
 ### OAuth не работает
 1. Проверь `GCAL_MCP_OAUTH_REDIRECT_URI` совпадает с Google Cloud Console
 2. Redirect URI: `https://viredge.com/calendar/mcp/oauth/callback`
+
+### Коннектор Claude не регистрируется («Couldn't register with sign-in service»)
+1. Проверь, что `GCAL_MCP_SERVER_BASE_URL` задан в `.env` (без него metadata → 500)
+2. Проверь `curl .../.well-known/oauth-authorization-server` → 200 + `S256`
+3. Проверь, что MCP-эндпоинт без токена отдаёт `401` c заголовком `WWW-Authenticate`
+4. Если Claude пробует host-root `https://viredge.com/.well-known/...` — нужен
+   Caddy-роут этих путей на контейнер (см. reverse-proxy конфиг)

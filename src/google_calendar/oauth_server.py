@@ -8,71 +8,37 @@ Endpoints:
 - GET /oauth/status/{account} - Check authorization status
 """
 
-import hashlib
-import secrets
 import time
 from typing import Optional
 
-from fastapi import APIRouter, Query, HTTPException, Form
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
-
-from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 
-from google_calendar.settings import settings
-from google_calendar.utils.config import load_oauth_client, get_account
-from google_calendar.api.client import SCOPES, save_credentials, get_credentials, clear_service_cache
+from google_calendar.api.client import (
+    SCOPES,
+    clear_service_cache,
+    get_credentials,
+    save_credentials,
+)
 from google_calendar.oauth_state import (
+    PENDING_FLOW_TTL_SECONDS,
+    cleanup_expired_flows,
     generate_state,
-    store_pending_flow,
     get_pending_flow,
     get_pending_flow_data,
-    cleanup_expired_flows,
-    PENDING_FLOW_TTL_SECONDS,
+    store_pending_flow,
 )
-
+from google_calendar.settings import settings
+from google_calendar.utils.config import get_account, load_oauth_client
 
 oauth_router = APIRouter(prefix="/oauth", tags=["oauth"])
-
-# In-memory token store for OAuth 2.0 Client Credentials
-_active_tokens: dict[str, float] = {}
-
-# Token lifetime: 1 hour
-TOKEN_LIFETIME_SECONDS = 3600
 
 
 def _cleanup_expired_flows() -> int:
     """Remove expired pending flows. Returns count of removed entries."""
     cleanup_expired_flows()
     return 0  # Count not tracked in shared module
-
-
-def _cleanup_expired_tokens() -> int:
-    """Remove expired tokens. Returns count of removed entries."""
-    now = time.time()
-    expired = [token for token, expiry in _active_tokens.items() if now > expiry]
-    for token in expired:
-        del _active_tokens[token]
-    return len(expired)
-
-
-def generate_access_token(client_id: str) -> str:
-    """Generate a secure access token."""
-    random_part = secrets.token_urlsafe(32)
-    timestamp = str(int(time.time()))
-    token_input = f"{client_id}:{random_part}:{timestamp}"
-    return hashlib.sha256(token_input.encode()).hexdigest()
-
-
-def validate_access_token(token: str) -> bool:
-    """Check if access token is valid and not expired."""
-    if token not in _active_tokens:
-        return False
-    expiry = _active_tokens[token]
-    if time.time() > expiry:
-        del _active_tokens[token]
-        return False
-    return True
 
 
 @oauth_router.get("/start/{account}")
@@ -323,50 +289,3 @@ async def list_oauth_accounts():
         })
 
     return {"accounts": result}
-
-
-@oauth_router.post("/token")
-async def get_token(
-    grant_type: str = Form(...),
-    client_id: str = Form(...),
-    client_secret: str = Form(...)
-):
-    """
-    OAuth 2.0 Token endpoint for Client Credentials flow.
-    """
-    if grant_type != "client_credentials":
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "unsupported_grant_type",
-                "error_description": "Only client_credentials grant type is supported"
-            }
-        )
-
-    if not settings.oauth_client_id or not settings.oauth_client_secret:
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": "server_error",
-                "error_description": "OAuth client credentials not configured on server"
-            }
-        )
-
-    if client_id != settings.oauth_client_id or client_secret != settings.oauth_client_secret:
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "error": "invalid_client",
-                "error_description": "Invalid client_id or client_secret"
-            }
-        )
-
-    access_token = generate_access_token(client_id)
-    expiry_time = time.time() + TOKEN_LIFETIME_SECONDS
-    _active_tokens[access_token] = expiry_time
-
-    return {
-        "access_token": access_token,
-        "token_type": "Bearer",
-        "expires_in": TOKEN_LIFETIME_SECONDS
-    }

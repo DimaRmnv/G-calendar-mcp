@@ -14,17 +14,20 @@ Tools (7 total):
 - contacts: Contact management (channels, assignments)
 """
 
+import hmac
+from typing import Optional
+
 from fastmcp import FastMCP
+
+from google_calendar.tools.attendees import attendees
+from google_calendar.tools.availability import availability
 
 # Unified tools (consolidated from 16 to 7)
 from google_calendar.tools.calendars import calendars
-from google_calendar.tools.availability import availability
+from google_calendar.tools.contacts import contacts
 from google_calendar.tools.events import events
-from google_calendar.tools.attendees import attendees
 from google_calendar.tools.intelligence import weekly_brief
 from google_calendar.tools.projects import projects
-from google_calendar.tools.contacts import contacts
-
 
 # Create server
 mcp = FastMCP(
@@ -80,6 +83,11 @@ mcp.tool()(projects)
 mcp.tool()(contacts)
 
 
+def _constant_time_eq(a: Optional[str], b: Optional[str]) -> bool:
+    """None-safe constant-time string comparison (avoids auth timing leaks)."""
+    return a is not None and b is not None and hmac.compare_digest(a, b)
+
+
 def create_http_app():
     """
     Create FastAPI app for HTTP transport mode.
@@ -90,16 +98,22 @@ def create_http_app():
     - MCP endpoints
     - TokenExpiredError/AuthRequiredError handling with auth_url
     """
-    from fastapi import FastAPI, Request
-    from fastapi.responses import JSONResponse
-
     import asyncio
     from contextlib import asynccontextmanager
 
+    from fastapi import FastAPI, Request
+    from fastapi.responses import JSONResponse
+
+    from google_calendar.api.client import AuthRequiredError, RateLimitError, TokenExpiredError
+    from google_calendar.export_router import cleanup_expired_reports, export_router
+    from google_calendar.mcp_oauth import (
+        mcp_oauth_router,
+        verify_bearer_token,
+        well_known_router,
+        www_authenticate_value,
+    )
+    from google_calendar.oauth_server import oauth_router
     from google_calendar.settings import settings
-    from google_calendar.oauth_server import oauth_router, validate_access_token
-    from google_calendar.export_router import export_router, cleanup_expired_reports
-    from google_calendar.api.client import TokenExpiredError, AuthRequiredError, RateLimitError
 
     # Get MCP app first to access its lifespan
     mcp_app = mcp.http_app()
@@ -159,28 +173,30 @@ def create_http_app():
     # Add export router under /mcp/calendar (no auth - UUID is the token)
     app.include_router(export_router, prefix="/mcp/calendar")
 
-    # Add OAuth router under /mcp/calendar/oauth
+    # Add Google OAuth router under /mcp/calendar/oauth
     app.include_router(oauth_router, prefix="/mcp/calendar")
+
+    # OAuth 2.1 Authorization Server for MCP clients (Claude custom connectors):
+    # discovery metadata + dynamic client registration + authorize/token.
+    app.include_router(well_known_router, prefix="/mcp/calendar")
+    app.include_router(mcp_oauth_router, prefix="/mcp/calendar")
 
     # Authentication middleware
     @app.middleware("http")
     async def check_auth(request: Request, call_next):
         import base64
 
-        # Skip auth check for OAuth endpoints
-        if "/oauth" in request.url.path:
-            return await call_next(request)
-
-        # Skip for export downloads (UUID is the token)
-        if "/export/" in request.url.path:
-            return await call_next(request)
-
-        # Skip for health check
-        if request.url.path in ["/health", "/mcp/calendar/health"]:
-            return await call_next(request)
-
-        # Skip for docs
-        if request.url.path in ["/docs", "/redoc", "/openapi.json"]:
+        # Public, unauthenticated paths. Anchored with exact/prefix matches (not
+        # substring `in`) so that a future protected route whose path merely
+        # contains one of these segments cannot silently bypass authentication.
+        path = request.url.path
+        if (
+            path in ("/health", "/mcp/calendar/health", "/docs", "/redoc",
+                     "/openapi.json", "/docs/oauth2-redirect")
+            or path.startswith("/mcp/calendar/oauth/")        # Google + MCP OAuth endpoints
+            or path.startswith("/mcp/calendar/export/")       # UUID is the token
+            or path.startswith("/mcp/calendar/.well-known/")  # OAuth discovery metadata
+        ):
             return await call_next(request)
 
         # Check if any authentication is configured
@@ -196,15 +212,16 @@ def create_http_app():
         # Try Bearer token (OAuth 2.0 access token or API key)
         if auth_header.startswith("Bearer "):
             token = auth_header[7:]
-            # Check API key first
-            if has_api_key and token == settings.api_key:
+            # Check API key first (constant-time)
+            if has_api_key and _constant_time_eq(token, settings.api_key):
                 return await call_next(request)
-            # Check OAuth token
-            if validate_access_token(token):
+            # Check OAuth 2.1 access token (JWT issued by our authorization server)
+            if verify_bearer_token(token):
                 return await call_next(request)
             return JSONResponse(
                 {"error": "Unauthorized", "message": "Invalid or expired access token"},
-                status_code=401
+                status_code=401,
+                headers={"WWW-Authenticate": www_authenticate_value("invalid_token")},
             )
 
         # Try Basic auth (client_id:client_secret)
@@ -213,7 +230,9 @@ def create_http_app():
                 encoded = auth_header[6:]
                 decoded = base64.b64decode(encoded).decode("utf-8")
                 client_id, client_secret = decoded.split(":", 1)
-                if client_id == settings.oauth_client_id and client_secret == settings.oauth_client_secret:
+                if _constant_time_eq(client_id, settings.oauth_client_id) and _constant_time_eq(
+                    client_secret, settings.oauth_client_secret
+                ):
                     return await call_next(request)
             except Exception:
                 pass
@@ -238,12 +257,13 @@ def create_http_app():
             if not api_key:
                 api_key = request.query_params.get("api_key")
 
-            if api_key == settings.api_key:
+            if _constant_time_eq(api_key, settings.api_key):
                 return await call_next(request)
 
         return JSONResponse(
             {"error": "Unauthorized", "message": "Invalid or missing authentication"},
-            status_code=401
+            status_code=401,
+            headers={"WWW-Authenticate": www_authenticate_value()},
         )
 
     # Health check endpoints
