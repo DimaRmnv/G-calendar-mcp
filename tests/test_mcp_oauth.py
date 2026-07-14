@@ -100,6 +100,15 @@ def test_auth_code_is_single_use():
     assert mcp_oauth.consume_auth_code(code, REDIRECT, verifier) is None  # replay rejected
 
 
+def test_auth_code_bound_to_client():
+    verifier, challenge = _pkce_pair()
+    code = mcp_oauth.issue_auth_code("client-A", REDIRECT, challenge)
+    # A different client_id on redemption is rejected (and must not consume the code)...
+    assert mcp_oauth.consume_auth_code(code, REDIRECT, verifier, client_id="client-B") is None
+    # ...the correct client_id still succeeds.
+    assert mcp_oauth.consume_auth_code(code, REDIRECT, verifier, client_id="client-A") is not None
+
+
 def test_refresh_token_decode():
     claims = mcp_oauth._decode_refresh_token(mcp_oauth.issue_refresh_token("client-1", "mcp"))
     assert claims and claims["sub"] == "client-1"
@@ -120,6 +129,11 @@ def test_refresh_token_decode():
         ("http://claude.ai/cb", False),  # plain http only allowed for loopback
         ("ftp://claude.ai/cb", False),
         ("", False),
+        ("https://anthropic.com/cb", True),
+        ("https://evil.com\\@claude.ai/cb", False),  # backslash parser confusion
+        ("https://evil.com\\.claude.ai/cb", False),  # backslash parser confusion
+        ("https://evil.localhost/cb", False),  # loopback is exact-match only, never subdomain
+        ("http://[::1]:9/cb", True),  # ipv6 loopback
     ],
 )
 def test_redirect_allowlist(uri, ok):

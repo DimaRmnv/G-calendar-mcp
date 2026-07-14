@@ -60,20 +60,21 @@ AUTH_CODE_TTL = 60                  # 1 minute (OAuth 2.1: codes must be short-l
 
 _ALG = "HS256"
 
-# Hosts we will redirect authorization codes back to. Claude's connector
-# callbacks live on these hosts; loopback covers Claude Desktop. Anything else is
-# rejected to prevent open-redirect / authorization-code exfiltration.
-_ALLOWED_REDIRECT_HOSTS = (
+# Domains we redirect authorization codes back to: an exact match or a subdomain
+# is allowed. Loopback hosts (Claude Desktop) are matched exactly and handled
+# separately (they must not be subdomain-matched). Anything else is rejected to
+# prevent open-redirect / authorization-code exfiltration.
+_ALLOWED_REDIRECT_DOMAINS = (
     "claude.ai",
     "claude.com",
     "anthropic.com",
-    "localhost",
-    "127.0.0.1",
 )
+_LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
 
 # Best-effort single-use tracking for authorization codes, as defense in depth on
 # top of PKCE. Lost on restart, but codes live only AUTH_CODE_TTL seconds, so the
-# restart window is negligible.
+# restart window is negligible. Assumes a single server instance/worker; scaling
+# to multiple workers would require a shared store for this guard.
 _consumed_codes: dict[str, float] = {}
 
 
@@ -119,6 +120,8 @@ def _signing_key() -> bytes:
     if not settings.api_key:
         raise OAuthConfigError("GCAL_MCP_API_KEY is not configured")
     # Domain-separated derivation so the raw API key is never used as a JWT key.
+    # NOTE: a leaked access token is an offline oracle for the API key, so
+    # GCAL_MCP_API_KEY MUST be high-entropy random (not a human-chosen string).
     return hashlib.sha256(f"mcp-oauth-signing:v1:{settings.api_key}".encode()).digest()
 
 
@@ -224,11 +227,14 @@ def issue_auth_code(subject: str, redirect_uri: str, code_challenge: str, scope:
     return jwt.encode(payload, _signing_key(), algorithm=_ALG)
 
 
-def consume_auth_code(code: str, redirect_uri: str, code_verifier: str) -> Optional[dict[str, Any]]:
+def consume_auth_code(
+    code: str, redirect_uri: str, code_verifier: str, client_id: Optional[str] = None
+) -> Optional[dict[str, Any]]:
     """Validate an authorization code + PKCE verifier; return claims or None.
 
-    Enforces: signature, expiry, exact redirect_uri match, PKCE (S256), and
-    best-effort single use.
+    Enforces: signature, expiry, exact redirect_uri match, PKCE (S256), single
+    use, and — when the client presents a client_id — that it matches the client
+    the code was issued to.
     """
     if not code:
         return None
@@ -239,6 +245,9 @@ def consume_auth_code(code: str, redirect_uri: str, code_verifier: str) -> Optio
     if claims.get("typ") != "code":
         return None
     if claims.get("redirect_uri") != redirect_uri:
+        return None
+    # Bind the code to its client when one is presented (public clients send it).
+    if client_id is not None and claims.get("sub") != client_id:
         return None
     if not verify_pkce(code_verifier, claims.get("code_challenge", "")):
         return None
@@ -255,19 +264,26 @@ def consume_auth_code(code: str, redirect_uri: str, code_verifier: str) -> Optio
 def is_allowed_redirect_uri(uri: str) -> bool:
     if not uri:
         return False
+    # Reject backslashes and control characters up front: urlparse and the WHATWG
+    # (browser) URL parser disagree on them, so "https://evil.com\\@claude.ai"
+    # would parse with host=claude.ai here but resolve to evil.com in a browser —
+    # an open-redirect / authorization-code exfiltration vector.
+    if "\\" in uri or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in uri):
+        return False
     try:
         parsed = urlparse(uri)
     except ValueError:
         return False
-    if parsed.scheme not in ("https", "http"):
-        return False
     host = (parsed.hostname or "").lower()
     if not host:
         return False
-    # Plain http is only acceptable for loopback (Claude Desktop).
-    if parsed.scheme == "http" and host not in ("localhost", "127.0.0.1"):
+    # Loopback (Claude Desktop): exact host only (never subdomain-matched).
+    if host in _LOOPBACK_HOSTS:
+        return parsed.scheme in ("http", "https")
+    # Remote: https only, and a real Claude/Anthropic domain or subdomain.
+    if parsed.scheme != "https":
         return False
-    return any(host == allowed or host.endswith("." + allowed) for allowed in _ALLOWED_REDIRECT_HOSTS)
+    return any(host == d or host.endswith("." + d) for d in _ALLOWED_REDIRECT_DOMAINS)
 
 
 # --- Discovery metadata ----------------------------------------------------
@@ -446,7 +462,18 @@ def _consent_page(params: dict[str, Any], error: str = "") -> HTMLResponse:
   {hidden}
   <button type="submit">Authorize</button>
 </form></body></html>"""
-    return HTMLResponse(page, status_code=status)
+    return HTMLResponse(
+        page,
+        status_code=status,
+        headers={
+            "X-Frame-Options": "DENY",
+            "Content-Security-Policy": (
+                "default-src 'none'; style-src 'unsafe-inline'; "
+                "form-action 'self'; frame-ancestors 'none'"
+            ),
+            "Referrer-Policy": "no-referrer",
+        },
+    )
 
 
 @mcp_oauth_router.get("/authorize")
@@ -553,7 +580,7 @@ async def token(
     if grant_type == "authorization_code":
         if not code or not redirect_uri or not code_verifier:
             return _token_error("invalid_request", "code, redirect_uri and code_verifier are required")
-        claims = consume_auth_code(code, redirect_uri, code_verifier)
+        claims = consume_auth_code(code, redirect_uri, code_verifier, client_id)
         if not claims:
             return _token_error("invalid_grant", "invalid or expired authorization code")
         return _token_response(claims.get("sub", client_id or "mcp-client"),

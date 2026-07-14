@@ -14,6 +14,9 @@ Tools (7 total):
 - contacts: Contact management (channels, assignments)
 """
 
+import hmac
+from typing import Optional
+
 from fastmcp import FastMCP
 
 from google_calendar.tools.attendees import attendees
@@ -78,6 +81,11 @@ mcp.tool()(attendees)
 mcp.tool()(weekly_brief)
 mcp.tool()(projects)
 mcp.tool()(contacts)
+
+
+def _constant_time_eq(a: Optional[str], b: Optional[str]) -> bool:
+    """None-safe constant-time string comparison (avoids auth timing leaks)."""
+    return a is not None and b is not None and hmac.compare_digest(a, b)
 
 
 def create_http_app():
@@ -178,24 +186,17 @@ def create_http_app():
     async def check_auth(request: Request, call_next):
         import base64
 
-        # Skip auth check for OAuth endpoints
-        if "/oauth" in request.url.path:
-            return await call_next(request)
-
-        # Skip for export downloads (UUID is the token)
-        if "/export/" in request.url.path:
-            return await call_next(request)
-
-        # Skip for health check
-        if request.url.path in ["/health", "/mcp/calendar/health"]:
-            return await call_next(request)
-
-        # Skip for docs
-        if request.url.path in ["/docs", "/redoc", "/openapi.json"]:
-            return await call_next(request)
-
-        # Skip for OAuth discovery metadata (must be publicly reachable)
-        if "/.well-known/" in request.url.path:
+        # Public, unauthenticated paths. Anchored with exact/prefix matches (not
+        # substring `in`) so that a future protected route whose path merely
+        # contains one of these segments cannot silently bypass authentication.
+        path = request.url.path
+        if (
+            path in ("/health", "/mcp/calendar/health", "/docs", "/redoc",
+                     "/openapi.json", "/docs/oauth2-redirect")
+            or path.startswith("/mcp/calendar/oauth/")        # Google + MCP OAuth endpoints
+            or path.startswith("/mcp/calendar/export/")       # UUID is the token
+            or path.startswith("/mcp/calendar/.well-known/")  # OAuth discovery metadata
+        ):
             return await call_next(request)
 
         # Check if any authentication is configured
@@ -211,8 +212,8 @@ def create_http_app():
         # Try Bearer token (OAuth 2.0 access token or API key)
         if auth_header.startswith("Bearer "):
             token = auth_header[7:]
-            # Check API key first
-            if has_api_key and token == settings.api_key:
+            # Check API key first (constant-time)
+            if has_api_key and _constant_time_eq(token, settings.api_key):
                 return await call_next(request)
             # Check OAuth 2.1 access token (JWT issued by our authorization server)
             if verify_bearer_token(token):
@@ -229,7 +230,9 @@ def create_http_app():
                 encoded = auth_header[6:]
                 decoded = base64.b64decode(encoded).decode("utf-8")
                 client_id, client_secret = decoded.split(":", 1)
-                if client_id == settings.oauth_client_id and client_secret == settings.oauth_client_secret:
+                if _constant_time_eq(client_id, settings.oauth_client_id) and _constant_time_eq(
+                    client_secret, settings.oauth_client_secret
+                ):
                     return await call_next(request)
             except Exception:
                 pass
@@ -254,7 +257,7 @@ def create_http_app():
             if not api_key:
                 api_key = request.query_params.get("api_key")
 
-            if api_key == settings.api_key:
+            if _constant_time_eq(api_key, settings.api_key):
                 return await call_next(request)
 
         return JSONResponse(
