@@ -2,7 +2,12 @@
 
 Covers the flow Claude's custom-connector performs on connect: discovery
 metadata, dynamic client registration, authorization-code + PKCE, token issuance
-and refresh, and the protected-resource 401 challenge. See mcp_oauth.py.
+and refresh, and the protected-resource 401 challenge.
+
+The authorization server itself is the shared `mcp-oauth` package (pinned by SHA in
+pyproject.toml), not a module of this project; these tests pin how this server wires
+it up — the public base URL, the API key, the consent-screen label — and that the
+pre-existing API-key authentication still works alongside it.
 """
 from __future__ import annotations
 
@@ -11,9 +16,9 @@ import hashlib
 import os
 from urllib.parse import parse_qs, urlparse
 
+import mcp_oauth
 import pytest
 
-from google_calendar import mcp_oauth
 from google_calendar.settings import settings
 
 BASE_URL = "https://viredge.com/calendar/mcp"
@@ -23,9 +28,20 @@ REDIRECT = "https://claude.ai/api/mcp/auth_callback"
 
 @pytest.fixture(autouse=True)
 def _configure(monkeypatch):
-    """Point the AS at a known base URL / API key and reset the replay cache."""
+    """Point the AS at a known base URL / API key and reset the replay cache.
+
+    Mirrors the wiring in create_http_app(): the package is handed getters, not
+    values, so monkeypatching `settings` here reaches it even for tests that call
+    package functions directly without building the app.
+    """
     monkeypatch.setattr(settings, "server_base_url", BASE_URL, raising=False)
     monkeypatch.setattr(settings, "api_key", API_KEY, raising=False)
+    mcp_oauth.configure(
+        base_url=lambda: settings.server_base_url,
+        api_key=lambda: settings.api_key,
+        oauth_client=lambda: (settings.oauth_client_id, settings.oauth_client_secret),
+        service_name="Google Calendar",
+    )
     mcp_oauth._consumed_codes.clear()
     yield
     mcp_oauth._consumed_codes.clear()
@@ -386,6 +402,56 @@ def test_mcp_endpoint_challenges_unauthenticated(client):
         },
         json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
     )
+    assert r.status_code == 401
+    assert "resource_metadata" in r.headers.get("WWW-Authenticate", "")
+
+
+def test_consent_screen_is_branded_for_this_server(client):
+    """The package labels the consent screen from `service_name`, defaulting to "MCP".
+
+    Regression guard for the wiring: if create_http_app() ever stops passing
+    service_name, the screen silently degrades to "Connect MCP" and the user is asked
+    for an API key by a page that names no service.
+    """
+    _, challenge = _pkce_pair()
+    r = client.get(
+        "/mcp/calendar/oauth/authorize",
+        params={
+            "response_type": "code",
+            "client_id": "c1",
+            "redirect_uri": REDIRECT,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+        },
+    )
+    assert r.status_code == 200
+    assert "Connect Google Calendar" in r.text
+    assert "Authorize Google Calendar MCP" in r.text
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"headers": {"X-API-Key": API_KEY}},
+        {"headers": {"Authorization": f"Bearer {API_KEY}"}},
+        {"params": {"api_key": API_KEY}},
+    ],
+    ids=["x-api-key-header", "bearer-api-key", "query-param"],
+)
+def test_legacy_api_key_auth_still_accepted(client, kwargs):
+    """The pre-OAuth credentials keep working — other clients still use them.
+
+    Guards the swap of this server's own constant-time comparison for the package's
+    `constant_time_eq` across every branch of the auth middleware. Probes "/": it is
+    not on the public allow-list, so the middleware runs, and it is outside the MCP
+    mount, so a pass returns a plain 404 from routing rather than the 401 gate.
+    """
+    r = client.get("/", **kwargs)
+    assert r.status_code == 404
+
+
+def test_wrong_api_key_is_rejected_with_challenge(client):
+    r = client.get("/", headers={"X-API-Key": "WRONG"})
     assert r.status_code == 401
     assert "resource_metadata" in r.headers.get("WWW-Authenticate", "")
 

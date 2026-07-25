@@ -27,7 +27,6 @@ dependencies = [
     "google-api-python-client>=2.100.0",
     "google-auth-oauthlib>=1.1.0",
     "google-auth>=2.23.0",
-    "pyjwt>=2.0.0",
     "fastmcp>=3.4.4,<4.0.0",
     "openpyxl>=3.1.0",
     "rapidfuzz>=3.0.0",
@@ -44,6 +43,14 @@ cloud = [
     "uvicorn[standard]>=0.20.0",
     "asyncpg>=0.29.0",
     "pydantic-settings>=2.0.0",
+    # Shared OAuth 2.1 authorization server for the claude.ai custom connector (replaces the
+    # copy that used to live in src/google_calendar/mcp_oauth.py). PUBLIC repo, so it fetches
+    # over https with no key. Pinned by SHA: keep this rev identical across all MCP servers,
+    # bump it deliberately. Written as a PEP 508 direct reference rather than
+    # [tool.uv.sources] because this image builds with pip, which does not read that section.
+    # Pulls fastapi + pyjwt + python-multipart, so it belongs here and not in the stdio-only
+    # base dependencies; it requires Python >=3.11 (the image is 3.12).
+    "mcp-oauth @ git+https://github.com/DimaRmnv/mcp-oauth.git@d4f56fcb62143c928cd0405bc4148a5e3963f1ab",
 ]
 
 [project.scripts]
@@ -52,6 +59,12 @@ google-calendar-mcp = "google_calendar.__main__:main"
 [project.urls]
 Homepage = "https://github.com/DimaRmnv/G-calendar-mcp"
 Repository = "https://github.com/DimaRmnv/G-calendar-mcp"
+
+[tool.hatch.metadata]
+# The cloud extra pins mcp-oauth as a PEP 508 direct reference (git+https, SHA-pinned).
+# Hatchling rejects direct references outright unless this is on, and the build fails
+# with "cannot be a direct reference" — which is a build-time failure of the image.
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/google_calendar"]

@@ -146,7 +146,16 @@ pytest tests/ -v
 Claude при добавлении custom-коннектора **принудительно** выполняет OAuth 2.1
 Dynamic Client Registration к remote MCP-серверу (варианта «no auth» в UI больше
 нет). Поэтому сервер выступает как OAuth 2.1 Authorization Server + Protected
-Resource. Реализация — `src/google_calendar/mcp_oauth.py`.
+Resource.
+
+Реализация — общий пакет [`mcp-oauth`](https://github.com/DimaRmnv/mcp-oauth),
+тот же, что у `cTrader-MCP` и `trade-context-MCP`. Локальной копии здесь больше
+нет. Пакет закреплён по SHA в `[project.optional-dependencies].cloud`
+(`pyproject.toml`); ревизия должна совпадать на всех MCP-серверах, менять её —
+осознанно и везде сразу. Проводка — `configure(...)` в `create_http_app()`
+(`src/google_calendar/server.py`): туда передаются **геттеры**, а не значения,
+поэтому пакет читает живые настройки на каждый запрос. Из-за git-зависимости
+в образе нужен `git` (стоит в `Dockerfile`), а `cloud`-extra требует Python ≥3.11.
 
 Эндпоинты (публичный префикс `https://viredge.com/calendar/mcp`):
 - `GET  /.well-known/oauth-protected-resource` — RFC 9728 metadata
