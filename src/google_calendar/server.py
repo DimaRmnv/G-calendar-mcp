@@ -14,9 +14,6 @@ Tools (7 total):
 - contacts: Contact management (channels, assignments)
 """
 
-import hmac
-from typing import Optional
-
 from fastmcp import FastMCP
 
 from google_calendar.tools.attendees import attendees
@@ -83,11 +80,6 @@ mcp.tool()(projects)
 mcp.tool()(contacts)
 
 
-def _constant_time_eq(a: Optional[str], b: Optional[str]) -> bool:
-    """None-safe constant-time string comparison (avoids auth timing leaks)."""
-    return a is not None and b is not None and hmac.compare_digest(a, b)
-
-
 def create_http_app():
     """
     Create FastAPI app for HTTP transport mode.
@@ -103,17 +95,30 @@ def create_http_app():
 
     from fastapi import FastAPI, Request
     from fastapi.responses import JSONResponse
-
-    from google_calendar.api.client import AuthRequiredError, RateLimitError, TokenExpiredError
-    from google_calendar.export_router import cleanup_expired_reports, export_router
-    from google_calendar.mcp_oauth import (
+    from mcp_oauth import (
+        configure,
+        constant_time_eq,
         mcp_oauth_router,
         verify_bearer_token,
         well_known_router,
         www_authenticate_value,
     )
+
+    from google_calendar.api.client import AuthRequiredError, RateLimitError, TokenExpiredError
+    from google_calendar.export_router import cleanup_expired_reports, export_router
     from google_calendar.oauth_server import oauth_router
     from google_calendar.settings import settings
+
+    # Wire the shared OAuth AS to this server's settings. Getters, not values: the package
+    # calls them on every request, so live setting changes and test monkeypatches take effect.
+    # base_url must be the PUBLIC base of the mount (Caddy strips the /calendar/mcp prefix),
+    # and service_name is the label on the consent screen.
+    configure(
+        base_url=lambda: settings.server_base_url,
+        api_key=lambda: settings.api_key,
+        oauth_client=lambda: (settings.oauth_client_id, settings.oauth_client_secret),
+        service_name="Google Calendar",
+    )
 
     # Get MCP app first to access its lifespan
     mcp_app = mcp.http_app()
@@ -213,7 +218,7 @@ def create_http_app():
         if auth_header.startswith("Bearer "):
             token = auth_header[7:]
             # Check API key first (constant-time)
-            if has_api_key and _constant_time_eq(token, settings.api_key):
+            if has_api_key and constant_time_eq(token, settings.api_key):
                 return await call_next(request)
             # Check OAuth 2.1 access token (JWT issued by our authorization server)
             if verify_bearer_token(token):
@@ -230,7 +235,7 @@ def create_http_app():
                 encoded = auth_header[6:]
                 decoded = base64.b64decode(encoded).decode("utf-8")
                 client_id, client_secret = decoded.split(":", 1)
-                if _constant_time_eq(client_id, settings.oauth_client_id) and _constant_time_eq(
+                if constant_time_eq(client_id, settings.oauth_client_id) and constant_time_eq(
                     client_secret, settings.oauth_client_secret
                 ):
                     return await call_next(request)
@@ -257,7 +262,7 @@ def create_http_app():
             if not api_key:
                 api_key = request.query_params.get("api_key")
 
-            if _constant_time_eq(api_key, settings.api_key):
+            if constant_time_eq(api_key, settings.api_key):
                 return await call_next(request)
 
         return JSONResponse(
