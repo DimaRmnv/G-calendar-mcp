@@ -248,8 +248,9 @@ async def _execute_operation(op: str, p: dict) -> dict:
 async def contacts(operations: list[dict]) -> dict:
     """Unified contacts management.
 
-    SKILL REQUIRED: Read contacts-management skill for database operations.
-    For sending messages, read mcp-orchestration skill for channel routing.
+    This docstring is the operation reference (API contract). The
+    contacts-management skill holds data-entry conventions and role
+    categories; mcp-orchestration holds channel-routing decisions.
 
     CONTACTS:
 
@@ -312,6 +313,21 @@ async def contacts(operations: list[dict]) -> dict:
         Add to project team    → contact_list → select → assignment_add
         Project stakeholders   → project_team(project_id)
         Update contact info    → contact_get(id) → contact_update(id, ...)
+
+    VALID VALUES (per DB constraints):
+        org_type: donor, dfi, bank, mfi, nbfi, government, regulator,
+                  client, vendor, consulting, ngo, association,
+                  training_provider, partner, other
+        preferred_channel: email, telegram, teams, phone, whatsapp
+        channel_type: email, phone, telegram_id, telegram_username,
+                      telegram_chat_id, teams_id, teams_chat_id, whatsapp,
+                      linkedin, skype, google_calendar
+        relationship_strength: weak, moderate, strong
+
+    NOTE (no DB constraint): assignment role_name is free text — the role
+        NAME string (e.g. "Deputy Project Manager"), stored as-is in
+        contact_projects.role_name; role_code values live in the
+        project_roles dictionary
 
     BATCH OPERATIONS:
         contact_id=-1 means "use ID from previous contact_add in same batch"

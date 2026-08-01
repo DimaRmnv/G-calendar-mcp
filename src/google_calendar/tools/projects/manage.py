@@ -341,8 +341,9 @@ async def _execute_operation(op: str, p: dict) -> dict:
 async def projects(operations: list[dict]) -> dict:
     """Projects, phases, tasks, and organizations management.
 
-    SKILL REQUIRED: Read projects-management skill for full operations.
-    Read calendar-manager skill for event formatting by project structure.
+    This docstring is the operation reference (API contract). The
+    projects-management skill holds structure conventions (phase codes,
+    levels); calendar-manager holds event formatting rules.
 
     PROJECTS - TWO MAIN USE CASES:
 
