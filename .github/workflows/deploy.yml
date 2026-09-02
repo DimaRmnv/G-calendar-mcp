@@ -63,6 +63,7 @@ jobs:
       - name: Rebuild and restart
         run: |
           ssh -i ~/.ssh/deploy_key ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} '
+            set -euo pipefail
             cd ~/apps/google-calendar-mcp
             cp docker-compose.prod.yml docker-compose.yml
             docker compose build --quiet
@@ -74,14 +75,21 @@ jobs:
       - name: Run database migrations
         run: |
           ssh -i ~/.ssh/deploy_key ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} '
+            set -euo pipefail
             cd ~/apps/google-calendar-mcp
 
-            # PostgreSQL: Create database if not exists
-            docker exec shared-postgres psql -U travel -tc "SELECT 1 FROM pg_database WHERE datname = '\''google_calendar_mcp'\''" | grep -q 1 || \
-              docker exec shared-postgres psql -U travel -c "CREATE DATABASE google_calendar_mcp"
+            # PostgreSQL: create the database if it does not exist yet.
+            # -d postgres is required: psql defaults the database name to the user
+            # name, and no "travel" database exists, so without it both of these
+            # died with FATAL and the guard silently never ran.
+            if ! docker exec shared-postgres psql -U travel -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '\''google_calendar_mcp'\''" | grep -q 1; then
+              docker exec shared-postgres psql -U travel -d postgres -c "CREATE DATABASE google_calendar_mcp"
+            fi
 
-            # PostgreSQL: Apply schema migrations (all tables now in PostgreSQL)
-            docker exec -i shared-postgres psql -U travel -d google_calendar_mcp < src/google_calendar/db/schema.sql 2>&1 || true
+            # PostgreSQL: apply schema migrations (schema.sql is idempotent).
+            # ON_ERROR_STOP=1 because psql otherwise skips a failed statement and
+            # still exits 0, reporting a broken migration as a green deploy.
+            docker exec -i shared-postgres psql -v ON_ERROR_STOP=1 -U travel -d google_calendar_mcp < src/google_calendar/db/schema.sql 2>&1
 
             echo "PostgreSQL migrations complete!"
           '
