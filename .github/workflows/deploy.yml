@@ -6,7 +6,35 @@ on:
   workflow_dispatch:  # Manual trigger
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          # Match the runtime image (Dockerfile: python:3.12-slim) so the gate
+          # exercises the interpreter that actually ships.
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install dependencies
+        # cloud extras carry fastapi/starlette and the SHA-pinned mcp-oauth
+        # dependency the OAuth tests import; dev carries pytest and pyyaml.
+        run: pip install -e ".[cloud,dev]"
+
+      - name: Run tests
+        run: pytest tests/ -q
+
   deploy:
+    # Deploy gate: the server is not touched -- not even the SSH key written --
+    # unless the suite is green. A separate job rather than a first step, so a
+    # later edit cannot slip a server-touching step in ahead of the tests.
+    needs: test
     runs-on: ubuntu-latest
 
     steps:
