@@ -109,6 +109,29 @@ def check_token_valid(account: str) -> bool:
     return creds is not None
 
 
+def get_google_client_binding(account: str) -> tuple[Optional[str], Optional[str]]:
+    """
+    Return (token_client_id, configured_client_id) for account.
+
+    A refresh token is bound to the Google OAuth client that issued it, and the token
+    file carries that client_id, so refreshes keep using the OLD client even after the
+    oauth client JSON is swapped. Comparing the two shows which Google Cloud client each
+    account really runs on (the one to mark "agentic") and which accounts still need
+    re-authorization after a client change.
+    """
+    token_client_id = None
+    token_path = get_token_path(account)
+    if token_path.exists():
+        try:
+            token_client_id = json.loads(token_path.read_text(encoding="utf-8")).get("client_id")
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    client = load_oauth_client() or {}
+    configured_client_id = (client.get("installed") or client.get("web") or {}).get("client_id")
+    return token_client_id, configured_client_id
+
+
 def collect_oauth_client() -> dict:
     """
     Collect OAuth client JSON from user input.
@@ -392,6 +415,15 @@ def auth_list() -> None:
             status = "✗ no token"
 
         print(f"  {status} {name}: {email}{default_marker}")
+
+        token_client_id, configured_client_id = get_google_client_binding(name)
+        if token_client_id:
+            print(f"      Google OAuth client: {token_client_id}")
+            if configured_client_id and token_client_id != configured_client_id:
+                print(
+                    f"      ⚠ issued by a different client than the configured "
+                    f"{configured_client_id} - re-authorize to move it"
+                )
     
     print()
 
