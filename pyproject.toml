@@ -24,28 +24,28 @@ classifiers = [
 ]
 
 dependencies = [
-    "google-api-python-client>=2.100.0",
-    "google-auth-oauthlib>=1.1.0",
-    "google-auth>=2.23.0",
-    "fastmcp>=3.4.4,<4.0.0",
-    "openpyxl>=3.1.0",
-    "rapidfuzz>=3.0.0",
+    "google-api-python-client>=2.202.0",
+    "google-auth-oauthlib>=1.5.0",
+    "google-auth>=2.62.2",
+    "fastmcp>=4.1.8,<5.0.0",
+    "openpyxl>=3.1.5",
+    "rapidfuzz>=3.14.6",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=7.0.0",
-    "pytest-asyncio>=0.21.0",
-    "ruff>=0.1.0",
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.5.0",
+    "ruff>=0.17.5",
     # tests/test_compose_bindings.py parses the compose files; only reaches the
     # venv transitively otherwise, so `pip install -e ".[dev]"` would break it.
     "pyyaml>=6.0",
 ]
 cloud = [
-    "fastapi>=0.100.0",
-    "uvicorn[standard]>=0.20.0",
-    "asyncpg>=0.29.0",
-    "pydantic-settings>=2.0.0",
+    "fastapi>=0.162.5",
+    "uvicorn[standard]>=0.54.0",
+    "asyncpg>=0.32.0",
+    "pydantic-settings>=2.16.2",
     # Shared OAuth 2.1 authorization server for the claude.ai custom connector (replaces the
     # copy that used to live in src/google_calendar/mcp_oauth.py). PUBLIC repo, so it fetches
     # over https with no key. Pinned by SHA: keep this rev identical across all MCP servers,
@@ -90,4 +90,6 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# Explicit, so pytest-asyncio stops warning that its default is about to change.
+asyncio_default_fixture_loop_scope = "function"
 pythonpath = ["src"]
