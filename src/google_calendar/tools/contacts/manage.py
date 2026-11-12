@@ -53,19 +53,28 @@ async def _get_status() -> dict:
     }
 
 
-# Filters contact_list reads. An unknown key is refused: a dropped filter would return
-# the unfiltered list as if it had been filtered (issue #7).
-_CONTACT_LIST_FILTERS = ("organization", "country", "project_id", "role_name",
-                         "preferred_channel", "org_type", "active_only")
+# Filters the contact_list SQL honours. Anything else is refused before a query runs: a
+# dropped filter returns the unfiltered list as if it had been filtered (issue #7).
+_CONTACT_FILTERS = ("organization", "country", "org_type", "preferred_channel")
+_TEAM_FILTERS = ("project_id", "role_name")
 
 
 def _check_contact_list_filters(p: dict) -> None:
+    supported = _CONTACT_FILTERS + _TEAM_FILTERS
     # `account` is not a filter, but callers pass it to every operation.
-    unknown = sorted(set(p) - {"op", "account", *_CONTACT_LIST_FILTERS})
+    unknown = sorted(set(p) - {"op", "account", *supported})
     if unknown:
         raise ValueError(
-            f"contact_list: unknown filter(s) {', '.join(unknown)}; "
-            f"supported: {', '.join(_CONTACT_LIST_FILTERS)}"
+            f"contact_list: unknown filter(s) {', '.join(unknown)}; supported: {', '.join(supported)} "
+            "(only active contacts are listed)"
+        )
+    if p.get("role_name") and p.get("project_id") is None:
+        raise ValueError("contact_list: role_name filters a project's team; pass project_id too")
+    mixed = [f for f in _CONTACT_FILTERS if p.get(f)]
+    if p.get("project_id") is not None and mixed:
+        raise ValueError(
+            f"contact_list: project_id lists that project's team and cannot be combined with "
+            f"{', '.join(mixed)}"
         )
 
 
@@ -99,7 +108,7 @@ async def _execute_operation(op: str, p: dict) -> dict:
             organization=p.get("organization"),
             country=p.get("country"), project_id=p.get("project_id"),
             role_name=p.get("role_name"), preferred_channel=p.get("preferred_channel"),
-            org_type=p.get("org_type"), active_only=p.get("active_only", True)
+            org_type=p.get("org_type"),
         )
         return {"contacts": contacts, "total": len(contacts)}
     elif op == "contact_update":
@@ -274,9 +283,10 @@ async def contacts(operations: list[dict]) -> dict:
         LIST/SEARCH return COMPACT format (id, name, org, job_title, country, channel).
         Use contact_get(id) for FULL details. Add include_channels/include_projects for related data.
 
-        contact_list    : List all (compact). Filters: organization (name, partial match),
-                          country, org_type, preferred_channel, active_only; project_id
-                          (+ role_name) → that project's team. Unknown filters are refused.
+        contact_list    : List active contacts (compact). Filters: organization (name,
+                          partial match), country, org_type, preferred_channel — OR
+                          project_id (+ role_name) for that project's team; the two groups
+                          do not combine. Other keys or combinations are refused.
                           Returns: CONTACT_COMPACT[]
         contact_search  : Search by name/org/job (compact + email + score). Returns: CONTACT_COMPACT[]
         contact_get     : Full details. Params: id, include_channels (bool), include_projects (bool).

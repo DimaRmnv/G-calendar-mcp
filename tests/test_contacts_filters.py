@@ -1,9 +1,11 @@
-"""contacts(contact_list): the filters the docstring teaches are the ones the code reads.
+"""contacts(contact_list): every filter the docstring teaches reaches the SQL, or is refused.
 
 Issue #7 (the sibling of #6). The docstring taught `organization_id`, while the handler
-reads `organization` (a name, partial match), so the filter was silently dropped and the
-list came back unfiltered by organization as if it had been filtered. The docstring now
-names the real filters, and an unknown filter key is refused instead of ignored.
+reads `organization` (a name, partial match), so the filter was silently dropped. The
+verifier then showed two more silent drops: `active_only` (the views list active
+contacts only) and the filters ignored by the project-team query. Now the docstring
+names exactly what the SQL honours, and anything else is refused before any query runs.
+The tests record the SQL actually sent, so a filter dropped below the handler shows.
 """
 from __future__ import annotations
 
@@ -11,58 +13,84 @@ import inspect
 
 import pytest
 
+import google_calendar.tools.contacts.database as database
 import google_calendar.tools.contacts.manage as manage
-
-ALL_FILTERS = {"organization": "ADB", "country": "KG", "project_id": 5, "role_name": "Team Leader",
-               "preferred_channel": "email", "org_type": "donor", "active_only": False}
 
 
 @pytest.fixture
-def db(monkeypatch):
-    """Database layer stubbed at the names manage.py uses; records the filters received."""
-    received = {}
+def sql(monkeypatch):
+    """Database stubbed at the connection; returns the list of (query, params) sent."""
+    sent = []
+
+    class Conn:
+        async def fetch(self, query, *params):
+            sent.append((" ".join(query.split()), params))
+            return []
+
+    class Db:
+        async def __aenter__(self):
+            return Conn()
+
+        async def __aexit__(self, *_):
+            return False
 
     async def yes():
         return True
 
-    async def contact_list(**filters):
-        received["contact_list"] = filters
-        return []
-
     monkeypatch.setattr(manage, "database_exists", yes)
     monkeypatch.setattr(manage, "contacts_tables_exist", yes)
-    monkeypatch.setattr(manage, "contact_list", contact_list)
-    return received
+    monkeypatch.setattr(database, "get_db", Db)
+    return sent
 
 
-async def test_every_contact_list_filter_reaches_the_query(db):
-    result = await manage.contacts([{"op": "contact_list", **ALL_FILTERS}])
+async def test_each_contact_filter_becomes_a_condition(sql):
+    result = await manage.contacts([{"op": "contact_list", "organization": "ADB", "country": "KG",
+                                     "org_type": "donor", "preferred_channel": "email"}])
 
     assert result["summary"]["errors"] == 0
-    assert db["contact_list"] == ALL_FILTERS
+    query, params = sql[-1]
+    for condition in ("organization_name ILIKE", "org_type =", "country =", "preferred_channel ="):
+        assert condition in query, condition
+    assert params == ("%ADB%", "donor", "KG", "email")
 
 
-@pytest.mark.parametrize("wrong", ["organization_id", "is_active", "org"])
-async def test_an_unknown_filter_is_refused_not_ignored(db, wrong):
-    result = await manage.contacts([{"op": "contact_list", wrong: 5}])
+async def test_project_id_and_role_name_select_that_projects_team(sql):
+    await manage.contacts([{"op": "contact_list", "project_id": 5, "role_name": "Team Leader"}])
+
+    query, params = sql[-1]
+    assert "FROM v_project_team WHERE project_id = $1 AND project_role ILIKE $2" in query
+    assert params == (5, "%Team Leader%")
+
+
+@pytest.mark.parametrize("filters, says", [
+    ({"organization_id": 5}, "organization_id"),             # never existed
+    ({"is_active": False}, "is_active"),
+    ({"active_only": False}, "active_only"),                 # the views list active contacts only
+    ({"role_name": "Team Leader"}, "project_id"),             # role filters a project's team
+    ({"project_id": 5, "country": "KG"}, "project_id"),       # the team query ignores the rest
+    ({"project_id": 5, "organization": "ADB"}, "project_id"),
+])
+async def test_a_filter_the_sql_cannot_honour_is_refused(sql, filters, says):
+    result = await manage.contacts([{"op": "contact_list", **filters}])
 
     error = result["results"][0]["error"]
-    assert wrong in error and "organization" in error and "preferred_channel" in error
-    assert "contact_list" not in db  # the query never ran with the filter dropped
+    assert says in error
+    assert sql == []  # no query ran with a filter dropped
 
 
-async def test_an_account_passed_along_is_not_an_error(db):
+async def test_an_account_passed_along_is_not_an_error(sql):
     result = await manage.contacts([{"op": "contact_list", "account": "work", "country": "KG"}])
 
     assert result["summary"]["errors"] == 0
-    assert db["contact_list"]["country"] == "KG"
+    assert sql[-1][1] == ("KG",)
 
 
-def test_the_docstring_teaches_the_filters_the_code_reads():
+def test_the_docstring_teaches_exactly_the_filters_the_sql_honours():
     doc = inspect.getdoc(manage.contacts)
     line = next(ln for ln in doc.splitlines() if ln.strip().startswith("contact_list    :"))
     block = line + doc.split(line, 1)[1].split("contact_search", 1)[0]
 
-    assert "organization_id" not in block
-    for name in ALL_FILTERS:
+    for name in ("organization", "country", "org_type", "preferred_channel", "project_id", "role_name"):
         assert name in block, name
+    assert "organization_id" not in block
+    assert "active_only" not in block
