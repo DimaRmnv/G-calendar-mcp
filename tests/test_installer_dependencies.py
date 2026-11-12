@@ -9,12 +9,18 @@ from __future__ import annotations
 
 from importlib.metadata import requires
 
+from packaging.requirements import Requirement
+
 from google_calendar.cli import install
 
 
 def _base_requirements() -> list[str]:
-    # Requirements without an `extra == ...` marker are the runtime (non-optional) ones.
-    return [r for r in (requires("google-calendar-mcp") or []) if "extra ==" not in r]
+    # An independent oracle: evaluate each marker with no extra selected, the way pip
+    # does for a plain install — not the installer's own string filter.
+    return [
+        r for r in (requires("google-calendar-mcp") or [])
+        if Requirement(r).marker is None or Requirement(r).marker.evaluate({"extra": ""})
+    ]
 
 
 def test_installer_installs_exactly_the_packaged_runtime_requirements(monkeypatch, tmp_path):

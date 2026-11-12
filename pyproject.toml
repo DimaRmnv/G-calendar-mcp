@@ -8,7 +8,8 @@ version = "0.1.0"
 description = "Google Calendar MCP server for Claude Desktop"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.10"
+# 3.11: rapidfuzz >= 3.14.6, pydantic-settings and mcp-oauth need it (tests/test_python_floor.py).
+requires-python = ">=3.11"
 authors = [
     { name = "Dmytro Romanov" }
 ]
@@ -18,7 +19,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
@@ -80,7 +80,7 @@ sources = ["src"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 src = ["src"]
 
 [tool.ruff.lint]
