@@ -110,6 +110,7 @@ def create_http_app():
 
     from google_calendar.api.client import AuthRequiredError, RateLimitError, TokenExpiredError
     from google_calendar.export_router import cleanup_expired_reports, export_router
+    from google_calendar.oauth_links import server_has_authentication
     from google_calendar.oauth_server import oauth_router
     from google_calendar.settings import settings
 
@@ -217,8 +218,8 @@ def create_http_app():
         has_api_key = bool(settings.api_key)
         has_oauth = bool(settings.oauth_client_id and settings.oauth_client_secret)
 
-        if not has_api_key and not has_oauth:
-            # No auth configured, allow all
+        if not server_has_authentication():
+            # No auth configured, allow all (the OAuth start link follows the same rule)
             return await call_next(request)
 
         auth_header = request.headers.get("Authorization", "")

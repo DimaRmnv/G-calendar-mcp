@@ -63,9 +63,14 @@ def verify(token: str | None, account: str, now: float | None = None) -> bool:
     return linked_account == account and expires.isdigit() and int(expires) >= current
 
 
-def start_is_open() -> bool:
-    """A server with no secret at all (local development) needs no link token.
+def server_has_authentication() -> bool:
+    """The one definition of "this server authenticates callers" (middleware and start).
 
-    Defined by the same secret mint() uses: whenever start is closed, links can be minted.
+    True implies a secret for _key(), so whenever start is closed a link can be minted.
     """
-    return _key() is None
+    return bool(settings.api_key) or bool(settings.oauth_client_id and settings.oauth_client_secret)
+
+
+def start_is_open() -> bool:
+    """A server without authentication (local development) needs no link token."""
+    return not server_has_authentication()

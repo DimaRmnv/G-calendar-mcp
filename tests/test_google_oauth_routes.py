@@ -42,6 +42,9 @@ def client(tmp_path, monkeypatch):
         "token_uri": "https://oauth2.googleapis.com/token",
     }}))
     monkeypatch.setattr(settings, "api_key", API_KEY, raising=False)
+    # Pinned so a client id/secret from the environment or .env cannot change the outcome.
+    monkeypatch.setattr(settings, "oauth_client_id", None, raising=False)
+    monkeypatch.setattr(settings, "oauth_client_secret", None, raising=False)
     monkeypatch.setattr(settings, "server_base_url", BASE_URL, raising=False)
     monkeypatch.setattr(settings, "oauth_redirect_uri", f"{BASE_URL}/oauth/callback", raising=False)
 
@@ -146,6 +149,27 @@ def test_links_are_signed_when_only_the_connector_client_secret_is_set(client, m
     assert "?token=" in url
     assert client.get(_local(url)).status_code == 302
     assert client.get("/mcp/calendar/oauth/start/work").status_code == 403
+
+
+def test_the_api_key_takes_precedence_so_rotating_it_voids_links(client, monkeypatch):
+    # Production sets both secrets: links must follow the API key, not the client secret.
+    monkeypatch.setattr(settings, "oauth_client_id", "mcp-client")
+    monkeypatch.setattr(settings, "oauth_client_secret", "mcp-secret")
+    before_rotation = oauth_links.mint("work")
+    monkeypatch.setattr(settings, "api_key", "rotated-api-key")
+
+    r = client.get(f"/mcp/calendar/oauth/start/work?token={before_rotation}")
+
+    assert r.status_code == 403
+
+
+def test_a_client_secret_without_a_client_id_leaves_the_whole_server_open(client, monkeypatch):
+    # One definition of "authenticated" for the middleware and the start step: they agree.
+    monkeypatch.setattr(settings, "api_key", None)
+    monkeypatch.setattr(settings, "oauth_client_secret", "mcp-secret")
+
+    assert client.get("/mcp/calendar/oauth/accounts").status_code == 200
+    assert client.get("/mcp/calendar/oauth/start/work").status_code == 302
 
 
 def test_auth_urls_handed_out_by_the_server_are_signed_links(client):
