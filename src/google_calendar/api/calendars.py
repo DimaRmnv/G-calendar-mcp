@@ -9,7 +9,7 @@ Handles:
 
 from typing import Optional
 
-from google_calendar.api.client import get_service
+from google_calendar.api.client import execute_with_retry, get_service
 
 
 def list_calendars(
@@ -43,7 +43,7 @@ def list_calendars(
         if page_token:
             params["pageToken"] = page_token
         
-        result = service.calendarList().list(**params).execute()
+        result = execute_with_retry(service.calendarList().list(**params), account)
         
         for item in result.get("items", []):
             calendars.append({
@@ -75,7 +75,7 @@ def get_calendar(
     """
     service = get_service(account)
     
-    return service.calendars().get(calendarId=calendar_id).execute()
+    return execute_with_retry(service.calendars().get(calendarId=calendar_id), account)
 
 
 def get_calendar_colors(account: Optional[str] = None) -> dict:
@@ -90,7 +90,7 @@ def get_calendar_colors(account: Optional[str] = None) -> dict:
     """
     service = get_service(account)
 
-    result = service.colors().get().execute()
+    result = execute_with_retry(service.colors().get(), account)
 
     return {
         "calendar": result.get("calendar", {}),
@@ -131,7 +131,7 @@ def create_calendar(
     if location:
         body["location"] = location
 
-    return service.calendars().insert(body=body).execute()
+    return execute_with_retry(service.calendars().insert(body=body), account, idempotent=False)
 
 
 def update_calendar(
@@ -172,7 +172,7 @@ def update_calendar(
     if location is not None:
         patch["location"] = location
 
-    return service.calendars().patch(calendarId=calendar_id, body=patch).execute()
+    return execute_with_retry(service.calendars().patch(calendarId=calendar_id, body=patch), account)
 
 
 def delete_calendar(
@@ -190,7 +190,9 @@ def delete_calendar(
     """
     service = get_service(account)
 
-    service.calendars().delete(calendarId=calendar_id).execute()
+    # Not retried on transport errors: a repeat after a lost response answers 404 for a
+    # calendar that was in fact deleted.
+    execute_with_retry(service.calendars().delete(calendarId=calendar_id), account, idempotent=False)
 
 
 def get_calendar_acl(
@@ -205,7 +207,7 @@ def get_calendar_acl(
     """
     service = get_service(account)
 
-    result = service.acl().list(calendarId=calendar_id).execute()
+    result = execute_with_retry(service.acl().list(calendarId=calendar_id), account)
 
     rules = []
     for item in result.get("items", []):

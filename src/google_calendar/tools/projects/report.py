@@ -4,11 +4,13 @@ Report tool for time tracking.
 Combines status (quick summary) and full reports with Excel export.
 """
 
+import asyncio
 import os
 import uuid
 from typing import Optional
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from google_calendar.tools.projects.database import (
     ensure_database,
@@ -16,9 +18,11 @@ from google_calendar.tools.projects.database import (
     norm_get,
 )
 from google.auth.exceptions import RefreshError
+from googleapiclient.errors import HttpError
 
 from google_calendar.tools.projects.parser import parse_events_batch, TimeEntry
-from google_calendar.api.client import get_service, AuthRequiredError, TokenExpiredError
+from google_calendar.api.client import get_user_timezone, AuthRequiredError, TokenExpiredError
+from google_calendar.api.events import list_all_events
 from google_calendar.db.connection import get_db
 
 
@@ -37,17 +41,14 @@ def _count_workdays(start_date, end_date) -> int:
     return count
 
 
-def _fetch_events(service, calendar_id: str, start: datetime, end: datetime) -> list[dict]:
-    """Fetch events from Google Calendar."""
-    events_result = service.events().list(
-        calendarId=calendar_id,
-        timeMin=start.isoformat() + "Z" if start.tzinfo is None else start.isoformat(),
-        timeMax=end.isoformat() + "Z" if end.tzinfo is None else end.isoformat(),
-        singleEvents=True,
-        orderBy="startTime",
-        maxResults=500,
-    ).execute()
-    return events_result.get("items", [])
+def _fetch_events(account: Optional[str], calendar_id: str, start: datetime, end: datetime) -> list[dict]:
+    """Every event between two aware datetimes, all pages."""
+    return list_all_events(
+        account=account,
+        calendar_id=calendar_id,
+        time_min=start.isoformat(),
+        time_max=end.isoformat(),
+    )
 
 
 def _calculate_summary(
@@ -306,7 +307,15 @@ async def generate_report(
     """
     await ensure_database()
 
-    now = datetime.now()
+    # Period bounds follow the account's calendar day (owner decision 2026-11-12, issue #3).
+    # Google calls are blocking (and back off with time.sleep): keep them off the event loop.
+    try:
+        zone = ZoneInfo(await asyncio.to_thread(get_user_timezone, account))
+    except (AuthRequiredError, TokenExpiredError, RefreshError):
+        raise
+    except HttpError as e:
+        return {"error": f"Failed to read the calendar timezone: {e}"}
+    now = datetime.now(zone)
     today = now.date()
 
     # Settings
@@ -322,19 +331,11 @@ async def generate_report(
         # Assume percent, convert to equivalent days (based on 22 workday month)
         billable_target_days = int(22 * billable_target_value / 100)
 
-    # Get service
-    try:
-        service = get_service(account)
-    except (AuthRequiredError, TokenExpiredError, RefreshError):
-        raise
-    except Exception as e:
-        return {"error": f"Failed to get calendar service: {str(e)}"}
-
     # STATUS: Quick WTD/MTD summary (unchanged logic)
     if report_type == "status":
         week_start = now - timedelta(days=now.weekday())
         week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
-        month_start = datetime(now.year, now.month, 1)
+        month_start = datetime(now.year, now.month, 1, tzinfo=zone)
         end = now.replace(hour=23, minute=59, second=59)
 
         week_workdays = _count_workdays(week_start.date(), today)
@@ -345,7 +346,7 @@ async def generate_report(
         billable_target_hours = billable_target_days * 8
 
         try:
-            events = _fetch_events(service, calendar_id, month_start, end)
+            events = await asyncio.to_thread(_fetch_events, account, calendar_id, month_start, end)
         except (AuthRequiredError, TokenExpiredError, RefreshError):
             raise
         except Exception as e:
@@ -418,15 +419,15 @@ async def generate_report(
         norm_data = await norm_get(year=now.year, month=now.month)
         norm_hours = norm_data["hours"] if norm_data else 176
     elif report_type == "month":
-        start = datetime(now.year, now.month, 1)
+        start = datetime(now.year, now.month, 1, tzinfo=zone)
         end = now.replace(hour=23, minute=59, second=59)
         norm_data = await norm_get(year=now.year, month=now.month)
         norm_hours = norm_data["hours"] if norm_data else _count_workdays(start.date(), today) * 8
     elif report_type == "custom":
         if not start_date or not end_date:
             return {"error": "start_date and end_date required for custom report"}
-        start = datetime.fromisoformat(start_date)
-        end = datetime.fromisoformat(end_date).replace(hour=23, minute=59, second=59)
+        start = datetime.fromisoformat(start_date).replace(tzinfo=zone)
+        end = datetime.fromisoformat(end_date).replace(hour=23, minute=59, second=59, tzinfo=zone)
         # For custom, use the month norm of start date
         norm_data = await norm_get(year=start.year, month=start.month)
         norm_hours = norm_data["hours"] if norm_data else _count_workdays(start.date(), end.date()) * 8
@@ -436,7 +437,7 @@ async def generate_report(
     workdays_elapsed = _count_workdays(start.date(), min(today, end.date()))
 
     try:
-        events = _fetch_events(service, calendar_id, start, end)
+        events = await asyncio.to_thread(_fetch_events, account, calendar_id, start, end)
     except (AuthRequiredError, TokenExpiredError, RefreshError):
         raise
     except Exception as e:

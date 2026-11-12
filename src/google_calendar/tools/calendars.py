@@ -5,7 +5,10 @@ Unified tool for calendar management, colors, and settings.
 Replaces: manage_calendars, list_colors, manage_settings
 """
 
+import logging
 from typing import Optional, Literal
+
+from googleapiclient.errors import HttpError
 
 from google_calendar.api.calendars import (
     list_calendars as api_list_calendars,
@@ -16,8 +19,10 @@ from google_calendar.api.calendars import (
     get_calendar_acl,
     get_calendar_colors,
 )
-from google_calendar.api.client import get_service, handle_auth_errors
+from google_calendar.api.client import execute_with_retry, get_service, handle_auth_errors
 from google_calendar.utils.config import list_accounts as config_list_accounts, get_default_account
+
+logger = logging.getLogger(__name__)
 
 
 @handle_auth_errors
@@ -231,10 +236,15 @@ def _get_settings(account: Optional[str]) -> dict:
     result = {}
     for setting_id in settings_to_fetch:
         try:
-            setting = service.settings().get(setting=setting_id).execute()
-            result[setting_id] = setting.get("value")
-        except Exception:
-            pass
+            setting = execute_with_retry(service.settings().get(setting=setting_id), account)
+        except HttpError as e:
+            # A setting Google does not hold for this account is skipped; anything else
+            # (auth, rate limit, server) must reach the caller.
+            if e.resp.status != 404:
+                raise
+            logger.info("Calendar setting %s not found for account %s", setting_id, account)
+            continue
+        result[setting_id] = setting.get("value")
 
     # Normalize format24HourTime to timeFormat
     if "format24HourTime" in result:

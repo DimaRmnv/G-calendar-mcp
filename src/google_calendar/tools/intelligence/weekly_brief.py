@@ -8,7 +8,7 @@ from typing import Optional
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from google_calendar.api.events import list_events, format_event_summary
+from google_calendar.api.events import list_all_events
 from google_calendar.api.client import get_user_timezone, handle_auth_errors
 
 
@@ -51,7 +51,7 @@ def weekly_brief(
     """
     # Get timezone
     if not timezone:
-        timezone = get_user_timezone(account) or "UTC"
+        timezone = get_user_timezone(account)
     tz = ZoneInfo(timezone)
     
     # Calculate week bounds
@@ -69,15 +69,12 @@ def weekly_brief(
     week_end = week_start + timedelta(days=7)
     
     # Fetch events
-    result = list_events(
+    events = list_all_events(
         account=account,
         calendar_id=calendar_id,
         time_min=week_start.isoformat(),
         time_max=week_end.isoformat(),
-        max_results=250,
     )
-    
-    events = result.get("items", [])
     
     # Process events by day
     days = {}

@@ -39,11 +39,13 @@ def availability(
         query: Free/busy status. Returns busy blocks only — gaps are free time.
         find_slots: Available meeting slots respecting working hours across timezones.
 
-    Required: time_min, time_max (ISO datetime or date)
+    Required: time_min, time_max — ISO datetime for query; datetime or date for
+    find_slots. A time without an offset is local time in `timezone`, or in the
+    account's calendar timezone when not given.
 
     Params for query:
         calendars: List of calendar IDs. Default ['primary']
-        timezone: IANA format for results
+        timezone: IANA zone for naive times and for results
         account: Required when user specifies calendar
 
     Params for find_slots:
@@ -51,6 +53,8 @@ def availability(
         working_hours_start/end: 0-23, default 9-18
         participant_timezones: List of IANA timezones. Slots valid for ALL listed.
         max_slots: Default 10
+    find_slots returns unchecked_calendars {calendar_id: [reasons]} for calendars Google
+    would not show; their busy time is unknown and a warning says so.
 
     Examples:
         availability(action="query", time_min="2025-01-15T00:00:00", time_max="2025-01-15T23:59:59", account="work")
@@ -147,7 +151,7 @@ def _find_meeting_slots(
 
     # Default timezone
     if not timezone:
-        timezone = get_user_timezone(account) or "UTC"
+        timezone = get_user_timezone(account)
 
     # Default calendars
     if not calendars:
@@ -181,9 +185,19 @@ def _find_meeting_slots(
         timezone=timezone,
     )
 
+    # A calendar Google would not show has no busy blocks in the answer; it must be
+    # reported, not taken as free.
+    answered = freebusy_result.get("calendars", {})
+    unchecked = {
+        cal_id: [err.get("reason", "unknown") for err in answered[cal_id]["errors"]]
+        for cal_id in calendars
+        if cal_id in answered and answered[cal_id].get("errors")
+    }
+    unchecked.update({cal_id: ["missingFromResponse"] for cal_id in calendars if cal_id not in answered})
+
     # Merge all busy periods
     busy_periods = []
-    for cal_id, cal_data in freebusy_result.get("calendars", {}).items():
+    for cal_id, cal_data in answered.items():
         for busy in cal_data.get("busy", []):
             start = datetime.fromisoformat(busy["start"].replace("Z", "+00:00"))
             end = datetime.fromisoformat(busy["end"].replace("Z", "+00:00"))
@@ -272,11 +286,18 @@ def _find_meeting_slots(
             )
             slot_start = next_day.astimezone(ZoneInfo("UTC")).astimezone(tz)
 
-    return {
+    response = {
         "slots": slots,
         "timezone": timezone,
         "duration_minutes": duration_minutes,
         "working_hours": f"{working_hours_start:02d}:00-{working_hours_end:02d}:00",
         "participant_timezones": participant_timezones or [],
         "total_found": len(slots),
+        "unchecked_calendars": unchecked,
     }
+    if unchecked:
+        response["warning"] = (
+            f"Busy time of {', '.join(unchecked)} is unknown (Google did not return it); "
+            "the slots only reflect the other calendars."
+        )
+    return response

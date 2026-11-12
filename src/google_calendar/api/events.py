@@ -10,11 +10,18 @@ Handles:
 - Search events by query
 """
 
-from typing import Optional, Any
-from datetime import datetime, timedelta
+import logging
+import uuid
+from typing import Optional
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from google_calendar.api.client import get_service
+from googleapiclient.errors import HttpError
+
+from google_calendar.api.client import execute_with_retry, get_service
+from google_calendar.api.timeutil import to_rfc3339
+
+logger = logging.getLogger(__name__)
 
 
 def list_events(
@@ -30,15 +37,16 @@ def list_events(
     page_token: Optional[str] = None,
     private_extended_property: Optional[list[str]] = None,
     shared_extended_property: Optional[list[str]] = None,
+    timezone: Optional[str] = None,
 ) -> dict:
     """
     List events from calendar.
-    
+
     Args:
         account: Account name (uses default if None)
         calendar_id: Calendar ID (default: "primary")
-        time_min: Start of time range (ISO 8601)
-        time_max: End of time range (ISO 8601)
+        time_min: Start of time range (ISO 8601; without an offset it is local to `timezone`)
+        time_max: End of time range (ISO 8601; without an offset it is local to `timezone`)
         max_results: Maximum events to return (1-2500)
         single_events: Expand recurring events into instances
         order_by: "startTime" (requires single_events=True) or "updated"
@@ -47,7 +55,8 @@ def list_events(
         page_token: Token for pagination
         private_extended_property: Filter by private properties (key=value)
         shared_extended_property: Filter by shared properties (key=value)
-    
+        timezone: IANA zone for time_min/time_max given without an offset
+
     Returns:
         {
             "items": [event resources],
@@ -57,24 +66,23 @@ def list_events(
         }
     """
     service = get_service(account)
-    
+
     params = {
         "calendarId": calendar_id,
         "maxResults": min(max_results, 2500),
         "singleEvents": single_events,
         "showDeleted": show_deleted,
     }
-    
+
     if single_events:
         params["orderBy"] = order_by
-    
+
     if time_min:
-        # Ensure RFC3339 format with timezone
-        params["timeMin"] = _ensure_rfc3339(time_min)
-    
+        params["timeMin"] = to_rfc3339(time_min, timezone)
+
     if time_max:
-        params["timeMax"] = _ensure_rfc3339(time_max)
-    
+        params["timeMax"] = to_rfc3339(time_max, timezone)
+
     if query:
         params["q"] = query
     
@@ -87,14 +95,40 @@ def list_events(
     if shared_extended_property:
         params["sharedExtendedProperty"] = shared_extended_property
     
-    result = service.events().list(**params).execute()
-    
+    result = execute_with_retry(service.events().list(**params), account)
+
     return {
         "items": result.get("items", []),
         "nextPageToken": result.get("nextPageToken"),
         "summary": result.get("summary"),
         "timeZone": result.get("timeZone"),
     }
+
+
+def list_all_events(
+    account: Optional[str] = None,
+    calendar_id: str = "primary",
+    time_min: Optional[str] = None,
+    time_max: Optional[str] = None,
+    timezone: Optional[str] = None,
+) -> list[dict]:
+    """Every event in the window, following nextPageToken (for reports, not for the model)."""
+    items: list[dict] = []
+    page_token = None
+    while True:
+        page = list_events(
+            account=account,
+            calendar_id=calendar_id,
+            time_min=time_min,
+            time_max=time_max,
+            max_results=2500,
+            page_token=page_token,
+            timezone=timezone,
+        )
+        items.extend(page["items"])
+        page_token = page["nextPageToken"]
+        if not page_token:
+            return items
 
 
 def get_event(
@@ -104,15 +138,14 @@ def get_event(
 ) -> dict:
     """
     Get event by ID.
-    
+
     Returns full event resource.
     """
     service = get_service(account)
-    
-    return service.events().get(
-        calendarId=calendar_id,
-        eventId=event_id
-    ).execute()
+
+    return execute_with_retry(
+        service.events().get(calendarId=calendar_id, eventId=event_id), account
+    )
 
 
 def create_event(
@@ -164,11 +197,14 @@ def create_event(
     # Determine if all-day event
     is_all_day = _is_date_only(start)
     
-    # Build event body
+    # Client-chosen id (base32hex): if the transport re-sends the insert after Google
+    # created the event, the repeat answers 409 for this id instead of a duplicate.
+    event_id = uuid.uuid4().hex
     event = {
+        "id": event_id,
         "summary": summary,
     }
-    
+
     # Start/end times
     if is_all_day:
         event["start"] = {"date": start}
@@ -219,8 +255,14 @@ def create_event(
     if conference_data:
         event["conferenceData"] = conference_data
         params["conferenceDataVersion"] = 1
-    
-    return service.events().insert(**params).execute()
+
+    try:
+        return execute_with_retry(service.events().insert(**params), account, idempotent=False)
+    except HttpError as e:
+        if e.resp.status != 409:
+            raise
+        logger.info("Insert of event %s answered 409: it already exists, returning it", event_id)
+        return get_event(event_id, account=account, calendar_id=calendar_id)
 
 
 def update_event(
@@ -259,10 +301,9 @@ def update_event(
 
     # If timezone provided without start/end, fetch current times and convert
     if timezone and start is None and end is None:
-        current = service.events().get(
-            calendarId=calendar_id,
-            eventId=event_id
-        ).execute()
+        current = execute_with_retry(
+            service.events().get(calendarId=calendar_id, eventId=event_id), account
+        )
         current_start = current.get("start", {})
         current_end = current.get("end", {})
 
@@ -348,8 +389,8 @@ def update_event(
     if conference_data is not None:
         patch["conferenceData"] = conference_data
         params["conferenceDataVersion"] = 1
-    
-    return service.events().patch(**params).execute()
+
+    return execute_with_retry(service.events().patch(**params), account)
 
 
 def delete_event(
@@ -372,12 +413,17 @@ def delete_event(
         send_updates: "all", "externalOnly", "none"
     """
     service = get_service(account)
-    
-    service.events().delete(
-        calendarId=calendar_id,
-        eventId=event_id,
-        sendUpdates=send_updates
-    ).execute()
+
+    request = service.events().delete(
+        calendarId=calendar_id, eventId=event_id, sendUpdates=send_updates
+    )
+    try:
+        execute_with_retry(request, account)
+    except HttpError as e:
+        # 410 = already deleted, e.g. by a retried attempt whose first response was lost.
+        if e.resp.status != 410:
+            raise
+        logger.info("Event %s on %s was already deleted (410)", event_id, calendar_id)
 
 
 def quick_add(
@@ -395,11 +441,11 @@ def quick_add(
     """
     service = get_service(account)
     
-    return service.events().quickAdd(
-        calendarId=calendar_id,
-        text=text,
-        sendUpdates=send_updates
-    ).execute()
+    return execute_with_retry(
+        service.events().quickAdd(calendarId=calendar_id, text=text, sendUpdates=send_updates),
+        account,
+        idempotent=False,
+    )
 
 
 def move_event(
@@ -416,12 +462,16 @@ def move_event(
     """
     service = get_service(account)
     
-    return service.events().move(
-        calendarId=source_calendar_id,
-        eventId=event_id,
-        destination=destination_calendar_id,
-        sendUpdates=send_updates
-    ).execute()
+    return execute_with_retry(
+        service.events().move(
+            calendarId=source_calendar_id,
+            eventId=event_id,
+            destination=destination_calendar_id,
+            sendUpdates=send_updates,
+        ),
+        account,
+        idempotent=False,
+    )
 
 
 def get_recurring_instances(
@@ -455,12 +505,12 @@ def get_recurring_instances(
     }
     
     if time_min:
-        params["timeMin"] = _ensure_rfc3339(time_min)
-    
+        params["timeMin"] = to_rfc3339(time_min, None)
+
     if time_max:
-        params["timeMax"] = _ensure_rfc3339(time_max)
-    
-    result = service.events().instances(**params).execute()
+        params["timeMax"] = to_rfc3339(time_max, None)
+
+    result = execute_with_retry(service.events().instances(**params), account)
     return result.get("items", [])
 
 
@@ -491,26 +541,6 @@ def _is_date_only(dt_string: str) -> bool:
     # Date only: "2024-12-15"
     # DateTime: "2024-12-15T10:00:00" or "2024-12-15T10:00:00Z" or "2024-12-15T10:00:00+07:00"
     return "T" not in dt_string
-
-
-def _ensure_rfc3339(dt_string: str) -> str:
-    """
-    Ensure datetime string is RFC3339 format.
-
-    Handles:
-    - Already RFC3339: pass through
-    - ISO without timezone: append Z (UTC)
-    - Date only: error (should use date format)
-    """
-    if _is_date_only(dt_string):
-        raise ValueError(f"Expected datetime, got date: {dt_string}")
-
-    # Already has timezone indicator
-    if dt_string.endswith("Z") or "+" in dt_string or dt_string[-6:-5] == "-":
-        return dt_string
-
-    # No timezone - assume UTC
-    return dt_string + "Z"
 
 
 def parse_event_time(event: dict) -> tuple[str, str, bool]:
