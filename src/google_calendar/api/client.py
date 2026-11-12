@@ -267,7 +267,10 @@ def execute_with_retry(request, account: Optional[str], *, idempotent: bool = Tr
     - 429 or 403 rate limit → retried with backoff for any method (Google refused it).
     - 5xx and transport errors → retried only when `idempotent`: a create or move whose
       response was lost may already have happened, and repeating it duplicates the event.
-    - A transport error while refreshing the token → retried for any method.
+    - google-auth TransportError (httplib2/http.client failure while refreshing the
+      token) → retried for any method. A raw socket error during the refresh is not
+      wrapped by google-auth, cannot be told from an API transport error, and so
+      follows the idempotent rule.
     - Any other HttpError (403 not the organizer, 404, 400) → raised unchanged.
 
     Raises:

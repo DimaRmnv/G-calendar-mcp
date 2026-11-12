@@ -14,9 +14,11 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import http.client
+
 import httplib2
 import pytest
-from google.auth.exceptions import TransportError
+from google.auth.exceptions import RefreshError, TransportError
 from googleapiclient.errors import HttpError
 
 import google_calendar.api.calendars as api_calendars
@@ -30,9 +32,11 @@ from google_calendar.tools.attendees import attendees
 from google_calendar.tools.availability import availability
 from google_calendar.tools.calendars import calendars
 from google_calendar.tools.events import events
+from google_calendar.tools.intelligence import weekly_brief
 
 LOCAL_ZONE = "Africa/Johannesburg"  # +02:00 all year, no DST
 SERIES_RULE = ["RRULE:FREQ=WEEKLY;BYDAY=TU"]
+TEAM_CALENDAR = "team@group.calendar.google.com"
 BASE_URL = "https://stand.example/calendar/mcp"
 AUTH_URL = f"{BASE_URL}/oauth/start/work"
 
@@ -197,6 +201,29 @@ def test_search_reads_naive_bounds_in_the_account_timezone(fake):
                                                   "2026-11-12T14:00:00+02:00")
 
 
+def test_search_honours_an_explicit_timezone(fake):
+    fake.respond("events", "list", {"items": []})
+
+    events(action="search", account="work", query="x", timezone="Asia/Bangkok",
+           time_min="2026-11-12T12:00:00", time_max="2026-11-12T14:00:00")
+
+    assert fake.params("events", "list")[-1]["timeMin"] == "2026-11-12T12:00:00+07:00"
+
+
+@pytest.mark.parametrize("bound, expected", [
+    ({"time_min": "2028-06-01T00:00:00"}, ("2028-06-01T00:00:00+02:00", "2029-06-01T00:00:00+02:00")),
+    ({"time_max": "2020-06-01T00:00:00"}, ("2019-06-02T00:00:00+02:00", "2020-06-01T00:00:00+02:00")),
+])
+def test_search_with_one_bound_spans_a_year_from_it(fake, bound, expected):
+    # Anchored on "now", a bound far from today produced timeMax < timeMin.
+    fake.respond("events", "list", {"items": []})
+
+    events(action="search", account="work", query="x", **bound)
+
+    sent = fake.params("events", "list")[-1]
+    assert (sent["timeMin"], sent["timeMax"]) == expected
+
+
 def test_freebusy_query_reads_a_naive_window_in_the_account_timezone(fake):
     fake.respond("freebusy", "query", {"calendars": {"primary": {"busy": []}}})
 
@@ -221,16 +248,24 @@ def test_rate_limited_read_is_retried(fake):
     assert fake.executed("events", "get") == 2
 
 
-def test_server_error_on_a_read_is_retried(fake):
-    fake.respond("events", "get", http_error(503, "backendError"), event("e1"))
+@pytest.mark.parametrize("status", [500, 502, 503])
+def test_server_error_on_a_read_is_retried(fake, status):
+    fake.respond("events", "get", http_error(status, "backendError"), event("e1"))
 
     assert events(action="get", account="work", event_id="e1")["id"] == "e1"
+    assert fake.executed("events", "get") == 2
 
 
-def test_network_error_on_a_read_is_retried(fake):
-    fake.respond("events", "get", ConnectionResetError("reset by peer"), event("e1"))
+@pytest.mark.parametrize("failure", [
+    ConnectionResetError("reset by peer"),
+    http.client.IncompleteRead(b"partial"),
+    httplib2.ServerNotFoundError("Unable to find the server"),
+])
+def test_network_error_on_a_read_is_retried(fake, failure):
+    fake.respond("events", "get", failure, event("e1"))
 
     assert events(action="get", account="work", event_id="e1")["id"] == "e1"
+    assert fake.executed("events", "get") == 2
 
 
 def test_unauthorized_is_answered_with_an_auth_url(fake):
@@ -261,12 +296,18 @@ def test_insufficient_scope_named_only_in_details_is_an_auth_problem(fake):
     assert (result["error"], result["auth_url"]) == ("auth_required", AUTH_URL)
 
 
-def test_an_auth_failure_drops_the_cached_service(fake, monkeypatch):
+@pytest.mark.parametrize("failure", [
+    http_error(401, "authError", "Invalid Credentials"),
+    http_error(403, "insufficientPermissions", "Request had insufficient authentication scopes."),
+    RefreshError("invalid_grant: Token has been expired or revoked."),
+])
+def test_an_auth_failure_drops_the_cached_service(fake, monkeypatch, failure):
     monkeypatch.setitem(client._services, "work", object())
-    fake.respond("events", "get", http_error(401, "authError", "Invalid Credentials"))
+    fake.respond("events", "get", failure)
 
-    events(action="get", account="work", event_id="e1")
+    result = events(action="get", account="work", event_id="e1")
 
+    assert (result["error"], result["auth_url"]) == ("auth_required", AUTH_URL)
     assert "work" not in client._services
 
 
@@ -367,12 +408,13 @@ def test_create_whose_transport_resend_hits_a_duplicate_returns_the_event(fake):
     fake.respond("events", "insert", http_error(409, "duplicate", "The requested identifier already exists."))
     fake.respond("events", "get", lambda params: event(params["eventId"]))
 
-    result = events(action="create", account="work", summary="x",
+    result = events(action="create", account="work", summary="x", calendar_id=TEAM_CALENDAR,
                     start="2026-11-12T12:00:00", end="2026-11-12T13:00:00")
 
     sent_id = fake.params("events", "insert")[0]["body"]["id"]
     assert result["id"] == sent_id
-    assert fake.params("events", "get")[-1]["eventId"] == sent_id
+    looked_up = fake.params("events", "get")[-1]
+    assert (looked_up["eventId"], looked_up["calendarId"]) == (sent_id, TEAM_CALENDAR)
 
 
 def test_move_is_not_retried_after_a_lost_response(fake):
@@ -515,6 +557,17 @@ def test_batch_stops_when_the_rate_limit_persists(fake):
     assert fake.executed("events", "insert") == 3
 
 
+def test_batch_stops_when_the_token_has_expired(fake, monkeypatch):
+    def expired(account=None):
+        raise client.TokenExpiredError(account="work", auth_url=AUTH_URL)
+    monkeypatch.setattr(api_events, "get_service", expired)
+
+    result = events(action="batch", account="work", operations=_three_creates())
+
+    assert (result["error"], result["auth_url"]) == ("token_expired", AUTH_URL)
+    assert [r["status"] for r in result["results"]] == ["error", "not_attempted", "not_attempted"]
+
+
 def test_batch_keeps_going_after_an_ordinary_error(fake):
     fake.respond("events", "insert", http_error(400, "invalid", "Bad Request"),
                  lambda params: event(params["body"]["id"]))
@@ -623,7 +676,23 @@ async def test_custom_report_bounds_are_whole_days_in_the_account_timezone(fake,
                                                   "2026-10-31T23:59:59+02:00")
 
 
-async def test_report_backoff_does_not_block_the_event_loop(fake, report_stand, monkeypatch):
+@pytest.mark.parametrize("report_type, first_day", [
+    ("month", lambda now: now.replace(day=1)),
+    ("week", lambda now: now - timedelta(days=now.weekday())),
+])
+async def test_month_and_week_report_bounds_start_at_local_midnight(
+        fake, report_stand, report_type, first_day):
+    fake.respond("settings", "get", {"value": "Asia/Bangkok"})
+    fake.respond("events", "list", {"items": []})
+
+    await report.generate_report(report_type=report_type, account="work")
+
+    start = first_day(datetime.now(ZoneInfo("Asia/Bangkok")))
+    assert fake.params("events", "list")[0]["timeMin"] == f"{start:%Y-%m-%d}T00:00:00+07:00"
+
+
+@pytest.mark.parametrize("report_type", ["status", "week"])
+async def test_report_backoff_does_not_block_the_event_loop(fake, report_stand, monkeypatch, report_type):
     # A sleep on the event-loop thread freezes every other MCP session and /health.
     on_loop = []
 
@@ -638,10 +707,21 @@ async def test_report_backoff_does_not_block_the_event_loop(fake, report_stand, 
     fake.respond("settings", "get", http_error(429, "rateLimitExceeded"), {"value": LOCAL_ZONE})
     fake.respond("events", "list", http_error(429, "rateLimitExceeded"), {"items": []})
 
-    await report.generate_report(report_type="status", account="work")
+    await report.generate_report(report_type=report_type, account="work")
 
     assert fake.executed("events", "list") == 2
     assert on_loop == []
+
+
+def test_weekly_brief_reads_every_page(fake):
+    fake.respond("events", "list", _paged({
+        None: ([event(f"p1-{i}") for i in range(3)], "p2"),
+        "p2": ([event(f"p2-{i}") for i in range(2)], None),
+    }))
+
+    result = weekly_brief(account="work", start_date="2026-11-09")
+
+    assert result["summary"]["total_events"] == 5
 
 
 # --------------------------------------------------------------------------
