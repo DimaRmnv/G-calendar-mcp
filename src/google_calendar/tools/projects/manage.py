@@ -37,6 +37,23 @@ from google_calendar.db.connection import get_db
 from google_calendar.tools.projects.report import generate_report
 from google_calendar.api.client import handle_auth_errors, AuthRequiredError, TokenExpiredError
 
+# Filters each list operation reads. An unknown key is refused: a dropped filter would
+# return the unfiltered list as if it had been filtered.
+_LIST_FILTERS = {
+    "project_list": ("active_only", "billable_only"),
+    "org_list": ("organization_type", "country", "relationship_status", "active_only"),
+}
+
+
+def _check_filters(op: str, p: dict) -> None:
+    # `account` is not a filter, but callers pass it to every operation; projects are not per account.
+    unknown = sorted(set(p) - {"op", "account", *_LIST_FILTERS[op]})
+    if unknown:
+        raise ValueError(
+            f"{op}: unknown filter(s) {', '.join(unknown)}; "
+            f"supported: {', '.join(_LIST_FILTERS[op])}"
+        )
+
 
 async def _execute_operation(op: str, p: dict) -> dict:
     """Execute a single operation. All database functions are async."""
@@ -66,6 +83,7 @@ async def _execute_operation(op: str, p: dict) -> dict:
             include_team=p.get("include_team", False)
         )
     elif op == "project_list":
+        _check_filters(op, p)
         projects = await project_list(
             billable_only=p.get("billable_only", False),
             active_only=p.get("active_only", False)
@@ -160,6 +178,7 @@ async def _execute_operation(op: str, p: dict) -> dict:
             include_projects=p.get("include_projects", False)
         )
     elif op == "org_list":
+        _check_filters(op, p)
         orgs = await org_list(
             organization_type=p.get("organization_type"),
             country=p.get("country"),
@@ -357,7 +376,7 @@ async def projects(operations: list[dict]) -> dict:
 
     PROJECT OPERATIONS:
 
-        project_list        : All projects (compact). Filters: is_active, is_billable.
+        project_list        : All projects (compact). Filters: active_only, billable_only.
                               Returns: PROJECT_COMPACT[]
 
         project_list_active : Active projects with full structure (phases[].tasks[], universal_tasks[]).
@@ -388,7 +407,7 @@ async def projects(operations: list[dict]) -> dict:
         LIST/SEARCH return COMPACT (6 fields). Use org_get for FULL details.
 
         org_list      : All orgs (compact). Filters: organization_type, country,
-                        relationship_status, is_active. Returns: ORG_COMPACT[]
+                        relationship_status, active_only. Returns: ORG_COMPACT[]
         org_search    : Search name/short_name. Returns: ORG_COMPACT[]
         org_get       : Full details. Params: id OR name, include_projects.
                         Returns: ORG_FULL, optionally with projects[]
@@ -448,7 +467,7 @@ async def projects(operations: list[dict]) -> dict:
 
     Examples:
         projects(operations=[{"op": "project_list_active"}])
-        projects(operations=[{"op": "project_list", "is_active": true}])
+        projects(operations=[{"op": "project_list", "active_only": true}])
         projects(operations=[{"op": "project_get", "id": 1, "include_orgs": true, "include_team": true}])
         projects(operations=[{"op": "org_list", "organization_type": "donor"}])
         projects(operations=[{"op": "org_get", "id": 5, "include_projects": true}])
