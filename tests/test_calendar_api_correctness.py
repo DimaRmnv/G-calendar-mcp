@@ -980,15 +980,62 @@ def test_find_slots_reads_date_bounds_by_the_same_rule(fake):
     assert len(starts) == 9
 
 
-@pytest.mark.parametrize("bad", ["2026-13-01", "2026-11-31", "yesterday", "2026/11/09"])
-def test_a_malformed_date_bound_is_refused_before_google_is_called(fake, bad):
-    with pytest.raises(ValueError):
-        events(action="list", account="work", time_min=bad, time_max="2026-11-30")
-    with pytest.raises(ValueError):
-        availability(action="query", account="work", time_min=bad, time_max="2026-11-30")
+BERLIN = "Europe/Berlin"  # summer time ends 2026-10-25, starts 2019-03-31 and 2027-03-28
 
-    assert fake.params("events", "list") == []
-    assert fake.params("freebusy", "query") == []
+
+@pytest.mark.parametrize("bound, expected", [
+    # local datetime: the 7 days are counted on Berlin's clock, as before this change
+    ({"time_min": "2026-10-20T09:00:00"}, ("2026-10-20T09:00:00+02:00", "2026-10-27T09:00:00+01:00")),
+    ({"time_max": "2026-10-28T00:00:00"}, ("2026-10-21T00:00:00+02:00", "2026-10-28T00:00:00+01:00")),
+    # date: local midnight to local midnight
+    ({"time_min": "2026-10-20"}, ("2026-10-20T00:00:00+02:00", "2026-10-27T00:00:00+01:00")),
+    ({"time_max": "2026-10-27"}, ("2026-10-21T00:00:00+02:00", "2026-10-28T00:00:00+01:00")),
+    # a bound with its own offset keeps that offset, as before this change
+    ({"time_min": "2026-10-20T09:00:00+02:00"}, ("2026-10-20T09:00:00+02:00", "2026-10-27T09:00:00+02:00")),
+])
+def test_one_bound_list_window_is_counted_on_the_local_clock_across_dst(fake, bound, expected):
+    fake.respond("settings", "get", {"value": BERLIN})
+    fake.respond("events", "list", {"items": []})
+
+    result = events(action="list", account="work", **bound)
+
+    sent = fake.params("events", "list")[-1]
+    assert (sent["timeMin"], sent["timeMax"]) == expected
+    assert (result["timeMin"], result["timeMax"]) == expected
+
+
+@pytest.mark.parametrize("bound, expected", [
+    ({"time_min": "2027-03-27T12:00:00"}, ("2027-03-27T12:00:00+01:00", "2028-03-26T12:00:00+02:00")),
+    ({"time_max": "2020-03-29"}, ("2019-03-31T00:00:00+01:00", "2020-03-30T00:00:00+02:00")),
+])
+def test_one_bound_search_year_is_counted_on_the_local_clock_across_dst(fake, frozen_now, bound, expected):
+    fake.respond("settings", "get", {"value": BERLIN})
+    fake.respond("events", "list", {"items": []})
+
+    result = events(action="search", account="work", query="x", **bound)
+
+    sent = fake.params("events", "list")[-1]
+    assert (sent["timeMin"], sent["timeMax"]) == expected
+    assert (result["timeMin"], result["timeMax"]) == expected
+
+
+MALFORMED = ["2026-13-01", "2026-11-31", "yesterday", "2026/11/09", "2026-11-09T25:00:00"]
+
+
+@pytest.mark.parametrize("bad", MALFORMED)
+@pytest.mark.parametrize("call", [
+    lambda b: events(action="list", account="work", time_min=b, time_max="2026-11-30"),
+    lambda b: events(action="list", account="work", time_max=b),
+    lambda b: events(action="search", account="work", query="x", time_min=b),
+    lambda b: availability(action="query", account="work", time_min="2026-11-01", time_max=b),
+    lambda b: availability(action="find_slots", account="work", duration_minutes=30,
+                           time_min=b, time_max="2026-11-30"),
+], ids=["list", "list-one-bound", "search", "query", "find_slots"])
+def test_a_malformed_bound_is_refused_before_anything_is_asked_of_google(fake, bad, call):
+    with pytest.raises(ValueError, match=re.escape(f"Invalid time bound {bad!r}")):
+        call(bad)
+
+    assert fake.calls == []  # not even the account timezone lookup
 
 
 def test_window_bound_without_a_timezone_refuses_a_date():

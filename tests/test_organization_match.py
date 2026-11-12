@@ -1,13 +1,11 @@
 """contacts: every organization filter matches the organization's name, short name or local name.
 
 Issue #9. `contact_list(organization="ADB")` found nobody although the organization
-"Asian Development Bank" (short name ADB) has contacts: the filter compared the full
-name only. Each of the four places that take an organization filtered by its own
-rule — contact_list and export_contacts by part of the full name, the organization
-report by the full name, and contact_resolve's context compared a key the contact
-record does not have, so that hint never worked. Now all four use one rule,
-`database.ORG_MATCH`: part of the name, short name or local name, any case.
-The tests record the SQL actually sent.
+"Asian Development Bank" (short name ADB) has contacts. contact_list, export_contacts
+and the organization report each had their own copy of the SQL, all matching part of
+the full name only; contact_resolve's context compared a key the contact record does
+not have, so that hint never applied. Now all four use one rule, `database.ORG_MATCH`:
+part of the name, short name or local name, any case. The tests record the SQL sent.
 """
 from __future__ import annotations
 

@@ -31,21 +31,48 @@ def to_rfc3339(value: str, timezone: str | None) -> str:
     return as_aware(value, timezone).isoformat()
 
 
-def window_bound(value: str, timezone: str | None, *, end: bool) -> str:
-    """One bound of a time window (timeMin or timeMax) as an RFC3339 timestamp.
+def check_bounds(*values: str | None) -> None:
+    """Refuse a malformed time-window bound before anything is asked of Google.
+
+    A bound is a date ('2026-11-09') or an ISO datetime; None or '' means "not given".
+    """
+    for value in values:
+        if not value:
+            continue
+        try:
+            if "T" in value:
+                datetime.fromisoformat(value.replace("Z", "+00:00"))
+            else:
+                date.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid time bound {value!r}: expected a date ('2026-11-09') "
+                "or an ISO datetime ('2026-11-09T10:00:00')"
+            ) from exc
+
+
+def window_point(value: str, timezone: str | None, *, end: bool) -> datetime:
+    """One bound of a time window (timeMin or timeMax) as an aware datetime.
 
     A date ('2026-11-09') is that whole day on the clock of `timezone`: as the start
     bound it is the day's midnight, as the end bound the next midnight — Google's
     timeMax is exclusive, so the last moment of the day is still inside. A datetime
-    follows to_rfc3339. One rule for every window a tool takes (issue #9).
+    follows as_aware. A local value (a date, or a datetime without an offset) carries
+    the zone itself, not a fixed offset, so a span added to it (the 7-day window, the
+    search year) is counted on the local clock across a DST change; a value with its
+    own offset keeps that offset. One rule for every window a tool takes (issue #9).
     """
+    check_bounds(value)
     if "T" in value:
-        return to_rfc3339(value, timezone)
-    day = date.fromisoformat(value)  # a malformed date is refused here
+        return as_aware(value, timezone)
     if not timezone:
         raise ValueError(f"No timezone to interpret the date {value}")
+    day = date.fromisoformat(value)
     if end:
         day += timedelta(days=1)
-    # combine() puts midnight on the local clock, so a DST change inside the window
-    # still lands on the next local midnight.
-    return datetime.combine(day, time(), ZoneInfo(timezone)).isoformat()
+    return datetime.combine(day, time(), ZoneInfo(timezone))
+
+
+def window_bound(value: str, timezone: str | None, *, end: bool) -> str:
+    """window_point as an RFC3339 timestamp."""
+    return window_point(value, timezone, end=end).isoformat()

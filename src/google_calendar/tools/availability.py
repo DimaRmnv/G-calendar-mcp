@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 from google_calendar.api.freebusy import get_freebusy as api_get_freebusy
 from google_calendar.api.client import get_user_timezone, handle_auth_errors
-from google_calendar.api.timeutil import window_bound
+from google_calendar.api.timeutil import check_bounds, window_bound, window_point
 
 
 @handle_auth_errors
@@ -101,6 +101,7 @@ def _query_freebusy(
     """Query free/busy information for calendars."""
     if not time_min or not time_max:
         raise ValueError("time_min and time_max are required for 'query' action")
+    check_bounds(time_min, time_max)
 
     # Default to primary calendar
     if not calendars:
@@ -149,6 +150,7 @@ def _find_meeting_slots(
     """Find available meeting slots across calendars and timezones."""
     if not date_range_start or not date_range_end:
         raise ValueError("time_min and time_max are required for 'find_slots' action")
+    check_bounds(date_range_start, date_range_end)
 
     # Default timezone
     if not timezone:
@@ -158,10 +160,10 @@ def _find_meeting_slots(
     if not calendars:
         calendars = ["primary"]
 
-    # Parse date range (a date is the whole day, as for every window: timeutil.window_bound)
+    # Parse date range (a date is the whole day, as for every window: timeutil.window_point)
     tz = ZoneInfo(timezone)
-    range_start = datetime.fromisoformat(window_bound(date_range_start, timezone, end=False))
-    range_end = datetime.fromisoformat(window_bound(date_range_end, timezone, end=True))
+    range_start = window_point(date_range_start, timezone, end=False)
+    range_end = window_point(date_range_end, timezone, end=True)
 
     # Get busy times
     freebusy_result = api_get_freebusy(
