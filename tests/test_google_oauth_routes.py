@@ -9,6 +9,7 @@ These routes store the Google token every calendar call runs on, so:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from urllib.parse import parse_qs, urlparse
@@ -32,7 +33,8 @@ def client(tmp_path, monkeypatch):
     app_dir.mkdir(parents=True)
     (app_dir / "config.json").write_text(json.dumps({
         "default_account": "work",
-        "accounts": {"work": {"email": OWNER}, "personal": {"email": "other@example.test"}},
+        "accounts": {"work": {"email": OWNER}, "personal": {"email": "other@example.test"},
+                     "noemail": {}},
     }))
     (app_dir / "oauth_client.json").write_text(json.dumps({"web": {
         "client_id": "cid.apps.googleusercontent.com", "client_secret": "secret",
@@ -124,6 +126,28 @@ def test_a_refused_start_does_not_reveal_whether_the_account_exists(client):
     assert client.get("/mcp/calendar/oauth/start/no-such-account").status_code == 403
 
 
+def test_start_needs_no_link_when_the_server_has_no_authentication(client, monkeypatch):
+    # Local development: nothing on the server is protected, so neither is this step.
+    for name in ("api_key", "oauth_client_id", "oauth_client_secret"):
+        monkeypatch.setattr(settings, name, None, raising=False)
+
+    r = client.get("/mcp/calendar/oauth/start/work")
+
+    assert r.status_code == 302
+
+
+def test_links_are_signed_when_only_the_connector_client_secret_is_set(client, monkeypatch):
+    monkeypatch.setattr(settings, "api_key", None)
+    monkeypatch.setattr(settings, "oauth_client_id", "mcp-client", raising=False)
+    monkeypatch.setattr(settings, "oauth_client_secret", "mcp-secret", raising=False)
+
+    url = settings.get_auth_start_url("work")
+
+    assert "?token=" in url
+    assert client.get(_local(url)).status_code == 302
+    assert client.get("/mcp/calendar/oauth/start/work").status_code == 403
+
+
 def test_auth_urls_handed_out_by_the_server_are_signed_links(client):
     url = settings.get_auth_start_url("work")
 
@@ -172,6 +196,55 @@ def test_callback_refuses_another_google_identity(client, consent):
     assert "stranger@example.test" not in r.text
 
 
+def test_callback_refuses_an_account_without_a_configured_email(client, consent):
+    # Nothing to compare the identity with: refuse rather than accept anyone.
+    consent.email = "anyone@example.test"
+    state = _start(client, "noemail")
+
+    r = client.get(f"/mcp/calendar/oauth/callback?state={state}&code=c")
+
+    assert r.status_code == 403
+    assert consent.saved == []
+
+
+def test_a_failed_exchange_shows_a_generic_escaped_page(client, consent, monkeypatch):
+    def fail(flow, code):
+        raise RuntimeError("<script>alert(1)</script> internal detail")
+    monkeypatch.setattr(oauth_server, "_exchange_code", fail)
+    state = _start(client)
+
+    r = client.get(f"/mcp/calendar/oauth/callback?state={state}&code=c")
+
+    assert r.status_code == 500
+    assert "<script>" not in r.text and "internal detail" not in r.text
+    _assert_page_headers(r)
+    assert consent.saved == []
+
+
+def test_the_callback_keeps_google_calls_off_the_event_loop(client, consent, monkeypatch):
+    # A blocking exchange or a retry backoff on the loop stalls every other request.
+    on_loop = []
+
+    def recording(result):
+        def call(*_):
+            try:
+                asyncio.get_running_loop()
+                on_loop.append(True)
+            except RuntimeError:
+                pass
+            return result
+        return call
+
+    monkeypatch.setattr(oauth_server, "_exchange_code", recording(object()))
+    monkeypatch.setattr(oauth_server, "_consenting_email", recording(OWNER))
+    state = _start(client)
+
+    r = client.get(f"/mcp/calendar/oauth/callback?state={state}&code=c")
+
+    assert r.status_code == 200
+    assert on_loop == []
+
+
 def test_a_state_is_good_for_one_callback_only(client, consent):
     state = _start(client)
     client.get(f"/mcp/calendar/oauth/callback?state={state}&code=c")
@@ -188,7 +261,13 @@ def test_callback_echoes_nothing_unescaped_and_sends_a_csp(client):
     assert r.status_code == 400
     assert "<script>" not in r.text
     assert "&lt;script&gt;" in r.text
+    _assert_page_headers(r)
+
+
+def _assert_page_headers(r):
     assert "default-src 'none'" in r.headers["content-security-policy"]
+    assert r.headers["referrer-policy"] == "no-referrer"  # the callback URL carries code and state
+    assert r.headers["x-content-type-options"] == "nosniff"
 
 
 # ---------------------------------------------------------------------------

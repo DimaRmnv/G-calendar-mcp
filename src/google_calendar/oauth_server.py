@@ -9,6 +9,7 @@ Endpoints (mounted under /mcp/calendar):
 - GET /oauth/status/{account}, GET /oauth/accounts — behind the server's authentication
 """
 
+import asyncio
 import html
 import logging
 import time
@@ -191,8 +192,9 @@ async def oauth_callback(
     expected = ((get_account(account) or {}).get("email") or "").lower()
 
     try:
-        creds = _exchange_code(flow, code)
-        consented = _consenting_email(creds, account).lower()
+        # Blocking Google calls (and their retry backoff) stay off the event loop.
+        creds = await asyncio.to_thread(_exchange_code, flow, code)
+        consented = (await asyncio.to_thread(_consenting_email, creds, account)).lower()
     except Exception:
         # Browser-page boundary: nothing is stored yet; the cause goes to the log, not the page.
         logger.exception("OAuth code exchange failed for account %s", account)

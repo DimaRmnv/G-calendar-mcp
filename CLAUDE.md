@@ -252,7 +252,8 @@ agentic-клиентов (agent access controls) — аккаунт начнёт
 
 ### Переавторизация аккаунта
 `/oauth/start/{account}` открывается только по ссылке, подписанной сервером.
-- Подпись (`?token=…`) выводится из `GCAL_MCP_API_KEY`, ссылка живёт 1 час, ротация ключа её аннулирует.
+- Подпись (`?token=…`) выводится из `GCAL_MCP_API_KEY` (без него — из `GCAL_MCP_OAUTH_CLIENT_SECRET`).
+- Ссылка живёт 1 час; ротация секрета её аннулирует.
 - Ссылку без токена или чужую сервер отклоняет с 403.
 
 Где взять ссылку:
@@ -261,7 +262,9 @@ agentic-клиентов (agent access controls) — аккаунт начнёт
   ```bash
   docker exec google-calendar-mcp python -c "from google_calendar.settings import settings; print(settings.get_auth_start_url('work'))"
   ```
-- через `GET /oauth/status/{account}` с API-ключом (поле `auth_url`). `/oauth/status` и `/oauth/accounts` требуют аутентификации.
+- через `GET /oauth/accounts` с API-ключом: поле `auth_url` есть у каждого аккаунта.
+  `/oauth/status/{account}` даёт ссылку только для истёкшего или не авторизованного аккаунта.
+  Оба эндпоинта требуют аутентификации.
 
 Callback сохраняет токен, только если в Google вошли тем аккаунтом, чей email записан для этого имени в `config.json`. Иначе ответ 403 и токен не меняется.
 

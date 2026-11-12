@@ -2,8 +2,9 @@
 
 The start route is public: a re-authorization link is opened from the chat in a
 browser that has no API key. Without a signature anyone could start a flow for an
-account and bind their own Google token to it. Only the server mints links (keyed
-by the API key, so a key rotation voids them), each for one account, valid an hour.
+account and bind their own Google token to it. Only the server mints links (keyed by
+its secret — the API key, else the connector client secret — so rotating it voids
+them), each for one account, valid an hour.
 """
 
 from __future__ import annotations
@@ -20,9 +21,11 @@ LINK_TTL_SECONDS = 3600
 
 
 def _key() -> bytes | None:
-    if not settings.api_key:
+    # The server's own secret: the API key, else the connector's OAuth client secret.
+    secret = settings.api_key or settings.oauth_client_secret
+    if not secret:
         return None
-    return hashlib.sha256(b"gcal-oauth-start-link:" + settings.api_key.encode()).digest()
+    return hashlib.sha256(b"gcal-oauth-start-link:" + secret.encode()).digest()
 
 
 def _b64(raw: bytes) -> str:
@@ -34,7 +37,7 @@ def _unb64(text: str) -> bytes:
 
 
 def mint(account: str, now: float | None = None) -> str | None:
-    """Token for `?token=` of /oauth/start/{account}; None when no API key is set."""
+    """Token for `?token=` of /oauth/start/{account}; None when the server has no secret."""
     key = _key()
     if key is None:
         return None
@@ -61,5 +64,8 @@ def verify(token: str | None, account: str, now: float | None = None) -> bool:
 
 
 def start_is_open() -> bool:
-    """A server with no authentication at all (local development) needs no link token."""
-    return not settings.api_key and not (settings.oauth_client_id and settings.oauth_client_secret)
+    """A server with no secret at all (local development) needs no link token.
+
+    Defined by the same secret mint() uses: whenever start is closed, links can be minted.
+    """
+    return _key() is None
