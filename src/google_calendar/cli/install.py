@@ -9,7 +9,10 @@ import json
 import shutil
 import subprocess
 import sys
+from importlib.metadata import PackageNotFoundError, requires
 from pathlib import Path
+
+DISTRIBUTION = "google-calendar-mcp"
 
 
 def get_claude_config_path() -> Path:
@@ -121,17 +124,29 @@ def create_venv() -> Path:
     return get_installed_venv_python()
 
 
+def runtime_requirements() -> list[str]:
+    """Runtime requirements of this package, read from its installed metadata.
+
+    pyproject.toml is the single source of truth. A hand-kept copy of the list used to
+    live here and drifted (unbounded fastmcp, stale floors, rapidfuzz missing), so the
+    standalone venv got different versions than the package declares.
+    """
+    try:
+        reqs = requires(DISTRIBUTION)
+    except PackageNotFoundError as e:
+        raise RuntimeError(
+            f"'{DISTRIBUTION}' is not installed, so its dependencies cannot be resolved. "
+            "Install the package (pip install -e .) and run the installer again."
+        ) from e
+    # Requirements carrying an `extra == ...` marker are optional (cloud, dev).
+    return [r for r in (reqs or []) if "extra ==" not in r]
+
+
 def install_dependencies(venv_python: Path) -> None:
     """Install dependencies into venv."""
     print("  Installing dependencies...")
 
-    dependencies = [
-        "google-api-python-client>=2.100.0",
-        "google-auth-oauthlib>=1.1.0",
-        "google-auth>=2.23.0",
-        "fastmcp>=0.1.0",
-        "openpyxl>=3.1.0",
-    ]
+    dependencies = runtime_requirements()
 
     subprocess.run(
         [str(venv_python), "-m", "pip", "install", "--quiet", "--upgrade", "pip"],
