@@ -163,10 +163,15 @@ def test_the_api_key_takes_precedence_so_rotating_it_voids_links(client, monkeyp
     assert r.status_code == 403
 
 
-def test_a_client_secret_without_a_client_id_leaves_the_whole_server_open(client, monkeypatch):
+@pytest.mark.parametrize("only", [
+    {"oauth_client_secret": "mcp-secret"},   # a client secret without its id
+    {"oauth_client_id": "mcp-client"},       # a client id without its secret
+])
+def test_half_a_connector_client_leaves_the_whole_server_open(client, monkeypatch, only):
     # One definition of "authenticated" for the middleware and the start step: they agree.
     monkeypatch.setattr(settings, "api_key", None)
-    monkeypatch.setattr(settings, "oauth_client_secret", "mcp-secret")
+    for name, value in only.items():
+        monkeypatch.setattr(settings, name, value)
 
     assert client.get("/mcp/calendar/oauth/accounts").status_code == 200
     assert client.get("/mcp/calendar/oauth/start/work").status_code == 302

@@ -30,29 +30,81 @@ from google_calendar.tools.projects.database import (
     # Project-Organization links (v2)
     project_org_add, project_org_get, project_org_list, project_org_update, project_org_delete,
     get_project_organizations, get_organization_projects,
+    PROJECT_UPDATE_FIELDS, PHASE_UPDATE_FIELDS, TASK_UPDATE_FIELDS, ORG_UPDATE_FIELDS,
+    PROJECT_ORG_UPDATE_FIELDS,
 )
 from google.auth.exceptions import RefreshError
+
+from google_calendar.tools.operation_keys import check_keys
 
 from google_calendar.db.connection import get_db
 from google_calendar.tools.projects.report import generate_report
 from google_calendar.api.client import handle_auth_errors, AuthRequiredError, TokenExpiredError
 
-# Filters each list operation reads. An unknown key is refused: a dropped filter would
-# return the unfiltered list as if it had been filtered.
-_LIST_FILTERS = {
-    "project_list": ("active_only", "billable_only"),
-    "org_list": ("organization_type", "country", "relationship_status", "active_only"),
+ROLE_UPDATE_FIELDS = frozenset({"role_name_en", "role_name_ru", "role_category", "description"})
+
+# Keys each operation reads (besides operation_keys.COMMON_KEYS). Anything else is refused
+# before the operation runs; tests/test_operation_keys.py keeps this table equal to what
+# _execute_operation actually reads.
+_OP_KEYS: dict[str, frozenset[str]] = {
+    "project_add": frozenset({"code", "description", "is_billable", "is_active", "structure_level",
+                              "full_name", "country", "sector", "start_date", "end_date",
+                              "contract_value", "currency", "context"}),
+    "project_get": frozenset({"id", "code", "include_orgs", "include_team"}),
+    "project_list": frozenset({"active_only", "billable_only"}),
+    "project_list_active": frozenset(),
+    "project_update": frozenset({"id"}) | PROJECT_UPDATE_FIELDS,
+    "project_delete": frozenset({"id"}),
+    "project_activate": frozenset({"id"}),
+    "project_deactivate": frozenset({"id"}),
+    "phase_add": frozenset({"project_id", "code", "description"}),
+    "phase_get": frozenset({"id", "project_id", "code", "include_tasks"}),
+    "phase_list": frozenset({"project_id"}),
+    "phase_update": frozenset({"id"}) | PHASE_UPDATE_FIELDS,
+    "phase_delete": frozenset({"id"}),
+    "task_add": frozenset({"code", "description", "phase_id", "project_id"}),
+    "task_get": frozenset({"id", "code", "phase_id", "project_id"}),
+    "task_list": frozenset({"phase_id", "project_id", "include_universal"}),
+    "task_update": frozenset({"id"}) | TASK_UPDATE_FIELDS,
+    "task_delete": frozenset({"id"}),
+    "org_add": frozenset({"name", "short_name", "name_local", "organization_type", "parent_org_id",
+                          "country", "city", "website", "context", "relationship_status",
+                          "first_contact_date", "notes"}),
+    "org_get": frozenset({"id", "name", "include_projects"}),
+    "org_list": frozenset({"organization_type", "country", "relationship_status", "active_only"}),
+    "org_update": frozenset({"id"}) | ORG_UPDATE_FIELDS,
+    "org_delete": frozenset({"id"}),
+    "org_search": frozenset({"query", "limit"}),
+    "project_org_add": frozenset({"project_id", "organization_id", "org_role", "is_lead",
+                                  "contract_value", "currency", "start_date", "end_date", "notes"}),
+    "project_org_get": frozenset({"id"}),
+    "project_org_list": frozenset({"project_id", "organization_id", "org_role"}),
+    "project_org_update": frozenset({"id"}) | PROJECT_ORG_UPDATE_FIELDS,
+    "project_org_delete": frozenset({"id"}),
+    "project_orgs": frozenset({"project_id"}),
+    "org_projects": frozenset({"organization_id"}),
+    "norm_add": frozenset({"year", "month", "hours"}),
+    "norm_get": frozenset({"id", "year", "month"}),
+    "norm_list": frozenset({"year"}),
+    "norm_delete": frozenset({"id"}),
+    "exclusion_add": frozenset({"pattern"}),
+    "exclusion_list": frozenset(),
+    "exclusion_delete": frozenset({"id"}),
+    "config_get": frozenset({"key"}),
+    "config_set": frozenset({"key", "value"}),
+    "config_list": frozenset(),
+    "role_add": frozenset({"role_code", "role_name_en", "role_name_ru", "role_category", "description"}),
+    "role_get": frozenset({"role_code"}),
+    "role_list": frozenset({"role_category"}),
+    "role_update": frozenset({"role_code"}) | ROLE_UPDATE_FIELDS,
+    "role_delete": frozenset({"role_code"}),
+    "report_status": frozenset(),
+    "report_week": frozenset(),
+    "report_month": frozenset(),
+    "report_custom": frozenset({"start_date", "end_date"}),
+    "cleanup_exports": frozenset(),
+    "init": frozenset(),
 }
-
-
-def _check_filters(op: str, p: dict) -> None:
-    # `account` is not a filter, but callers pass it to every operation; projects are not per account.
-    unknown = sorted(set(p) - {"op", "account", *_LIST_FILTERS[op]})
-    if unknown:
-        raise ValueError(
-            f"{op}: unknown filter(s) {', '.join(unknown)}; "
-            f"supported: {', '.join(_LIST_FILTERS[op])}"
-        )
 
 
 async def _execute_operation(op: str, p: dict) -> dict:
@@ -83,7 +135,6 @@ async def _execute_operation(op: str, p: dict) -> dict:
             include_team=p.get("include_team", False)
         )
     elif op == "project_list":
-        _check_filters(op, p)
         projects = await project_list(
             billable_only=p.get("billable_only", False),
             active_only=p.get("active_only", False)
@@ -178,7 +229,6 @@ async def _execute_operation(op: str, p: dict) -> dict:
             include_projects=p.get("include_projects", False)
         )
     elif op == "org_list":
-        _check_filters(op, p)
         orgs = await org_list(
             organization_type=p.get("organization_type"),
             country=p.get("country"),
@@ -288,8 +338,7 @@ async def _execute_operation(op: str, p: dict) -> dict:
                 rows = await conn.fetch("SELECT * FROM project_roles ORDER BY role_category, role_code")
             return {"roles": [dict(r) for r in rows]}
     elif op == "role_update":
-        allowed = {"role_name_en", "role_name_ru", "role_category", "description"}
-        updates = {k: v for k, v in p.items() if k in allowed and v is not None}
+        updates = {k: v for k, v in p.items() if k in ROLE_UPDATE_FIELDS and v is not None}
         if not updates:
             return await _execute_operation("role_get", p)
         set_parts = [f"{k} = ${i+1}" for i, k in enumerate(updates.keys())]
@@ -364,6 +413,9 @@ async def projects(operations: list[dict]) -> dict:
     projects-management skill holds structure conventions (phase codes,
     levels); calendar-manager holds event formatting rules.
 
+    PARAMETERS: every operation refuses a parameter it does not read; the error lists the
+    supported ones. `account` is accepted everywhere.
+
     PROJECTS - TWO MAIN USE CASES:
 
         1. CALENDAR EVENTS → use project_list_active
@@ -376,8 +428,8 @@ async def projects(operations: list[dict]) -> dict:
 
     PROJECT OPERATIONS:
 
-        project_list        : All projects (compact). Filters: active_only, billable_only.
-                              Returns: PROJECT_COMPACT[]
+        project_list        : All projects (compact). Filters: active_only, billable_only
+                              (both default false). Returns: PROJECT_COMPACT[]
 
         project_list_active : Active projects with full structure (phases[].tasks[], universal_tasks[]).
                               Returns: PROJECT_CALENDAR[]
@@ -390,13 +442,13 @@ async def projects(operations: list[dict]) -> dict:
     PHASES:
 
         phase_list   : Phases of project (compact). Requires: project_id.
-        phase_get    : Phase details. Params: id, include_tasks.
+        phase_get    : Phase details. Params: id (or project_id + code), include_tasks.
         phase_add/update/delete: Standard CRUD.
 
     TASKS:
 
-        task_list    : Tasks (compact). Requires: phase_id OR project_id.
-        task_get     : Task details. Requires: id.
+        task_list    : Tasks (compact). Requires: phase_id OR project_id. Params: include_universal.
+        task_get     : Task details. Requires: id (or code + phase_id / project_id).
         task_add     : Create. Requires: code + (phase_id OR project_id).
                        phase_id → phase-linked task
                        project_id only → universal task (available for all phases)
@@ -407,8 +459,8 @@ async def projects(operations: list[dict]) -> dict:
         LIST/SEARCH return COMPACT (6 fields). Use org_get for FULL details.
 
         org_list      : All orgs (compact). Filters: organization_type, country,
-                        relationship_status, active_only. Returns: ORG_COMPACT[]
-        org_search    : Search name/short_name. Returns: ORG_COMPACT[]
+                        relationship_status, active_only (default true). Returns: ORG_COMPACT[]
+        org_search    : Search name/short_name. Params: query, limit. Returns: ORG_COMPACT[]
         org_get       : Full details. Params: id OR name, include_projects.
                         Returns: ORG_FULL, optionally with projects[]
         org_add/update/delete: Standard CRUD. Returns: ORG_COMPACT or {deleted, id}.
@@ -498,6 +550,7 @@ async def projects(operations: list[dict]) -> dict:
             continue
 
         try:
+            check_keys(op, op_data, _OP_KEYS)
             result = await _execute_operation(op, op_data)
             results.append({"index": i, "op": op, "result": result})
             success_count += 1

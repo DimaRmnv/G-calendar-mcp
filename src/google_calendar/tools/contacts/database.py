@@ -20,6 +20,18 @@ except ImportError:
 from google_calendar.db.connection import get_db, check_db_exists
 from google_calendar.db.dates import coerce_date, coerce_date_fields
 
+# Columns each *_update accepts. Single source: the update functions and the tool's
+# per-operation key check (tools/contacts/manage.py) both read these.
+CONTACT_UPDATE_FIELDS = frozenset({
+    'first_name', 'last_name', 'organization_id', 'org_notes', 'job_title', 'department',
+    'country', 'city', 'timezone', 'preferred_channel', 'preferred_language', 'context',
+    'relationship_type', 'relationship_strength', 'last_interaction_date', 'notes', 'is_active',
+})
+CHANNEL_UPDATE_FIELDS = frozenset({'channel_value', 'channel_label', 'is_primary', 'notes'})
+ASSIGNMENT_UPDATE_FIELDS = frozenset({
+    'role_name', 'start_date', 'end_date', 'is_active', 'workdays_allocated', 'notes',
+})
+
 
 # Valid values for CHECK constraints
 ORGANIZATION_TYPES = (
@@ -332,13 +344,7 @@ async def contact_list(
 
 async def contact_update(id: int, **kwargs) -> Optional[dict]:
     """Update contact by id. Returns CONTACT_COMPACT."""
-    allowed_fields = {
-        'first_name', 'last_name', 'organization_id', 'org_notes',
-        'job_title', 'department', 'country', 'city', 'timezone',
-        'preferred_channel', 'preferred_language', 'context',
-        'relationship_type', 'relationship_strength', 'last_interaction_date',
-        'notes', 'is_active'
-    }
+    allowed_fields = CONTACT_UPDATE_FIELDS
     # Fields that can be explicitly set to NULL
     nullable_fields = {
         'organization_id', 'org_notes', 'department', 'city', 'timezone',
@@ -626,7 +632,7 @@ async def channel_get(id: int) -> Optional[dict]:
 
 async def channel_update(id: int, **kwargs) -> Optional[dict]:
     """Update channel by id. Returns compact format."""
-    allowed_fields = {'channel_value', 'channel_label', 'is_primary', 'notes'}
+    allowed_fields = CHANNEL_UPDATE_FIELDS
     updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
 
     current = await channel_get(id)
@@ -763,7 +769,7 @@ async def assignment_list(
 
 async def assignment_update(id: int, **kwargs) -> Optional[dict]:
     """Update assignment by id."""
-    allowed_fields = {'role_name', 'start_date', 'end_date', 'is_active', 'workdays_allocated', 'notes'}
+    allowed_fields = ASSIGNMENT_UPDATE_FIELDS
     updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
 
     if not updates:

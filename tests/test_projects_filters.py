@@ -74,7 +74,7 @@ async def test_an_account_passed_along_is_not_an_error(db):
 def test_the_docstring_teaches_the_filters_the_code_reads():
     doc = inspect.getdoc(manage.projects)
 
-    assert "project_list        : All projects (compact). Filters: active_only, billable_only." in doc
-    assert "relationship_status, active_only." in doc
+    assert "project_list        : All projects (compact). Filters: active_only, billable_only\n" in doc
+    assert "relationship_status, active_only (default true)." in doc
     assert '"project_list", "is_active"' not in doc
     assert '{"op": "project_list", "active_only": true}' in doc

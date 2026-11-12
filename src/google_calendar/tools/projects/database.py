@@ -18,6 +18,22 @@ from google_calendar.db.dates import coerce_date, coerce_date_fields
 
 SCHEMA_VERSION = 2
 
+# Columns each *_update accepts. Single source: the update functions and the tool's
+# per-operation key check (tools/projects/manage.py) both read these.
+PROJECT_UPDATE_FIELDS = frozenset({
+    "code", "description", "is_billable", "is_active", "structure_level", "full_name",
+    "country", "sector", "start_date", "end_date", "contract_value", "currency", "context",
+})
+PHASE_UPDATE_FIELDS = frozenset({"code", "description"})
+TASK_UPDATE_FIELDS = frozenset({"code", "description", "phase_id", "project_id"})
+ORG_UPDATE_FIELDS = frozenset({
+    "name", "short_name", "name_local", "organization_type", "parent_org_id", "country",
+    "city", "website", "context", "relationship_status", "first_contact_date", "is_active", "notes",
+})
+PROJECT_ORG_UPDATE_FIELDS = frozenset({
+    "org_role", "contract_value", "currency", "is_lead", "start_date", "end_date", "notes",
+})
+
 # Organization types for organizations table
 ORGANIZATION_TYPES = (
     # Funding & Development
@@ -188,8 +204,7 @@ async def project_list(billable_only: bool = False, active_only: bool = False, c
 
 async def project_update(id: int, **kwargs) -> Optional[dict]:
     """Update project by id. Returns PROJECT_COMPACT: {id, code, description, is_billable, is_active, country}."""
-    allowed_fields = {"code", "description", "is_billable", "is_active", "structure_level",
-                     "full_name", "country", "sector", "start_date", "end_date", "contract_value", "currency", "context"}
+    allowed_fields = PROJECT_UPDATE_FIELDS
     updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
 
     if not updates:
@@ -359,7 +374,7 @@ async def phase_list(project_id: Optional[int] = None) -> list[dict]:
 
 async def phase_update(id: int, **kwargs) -> Optional[dict]:
     """Update phase by id. Returns: {id, project_id, code, description}."""
-    allowed_fields = {"code", "description"}
+    allowed_fields = PHASE_UPDATE_FIELDS
     updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
 
     if not updates:
@@ -521,7 +536,7 @@ async def task_update(id: int, **kwargs) -> Optional[dict]:
         - Set phase_id (and project_id=None) → link to specific phase
         - Set project_id (and phase_id=None) → make universal for project
     """
-    allowed_fields = {"code", "description", "phase_id", "project_id"}
+    allowed_fields = TASK_UPDATE_FIELDS
     updates = {k: v for k, v in kwargs.items() if k in allowed_fields}
 
     if not updates:
@@ -900,9 +915,7 @@ async def org_list(
 
 async def org_update(id: int, **kwargs) -> Optional[dict]:
     """Update organization. Returns ORG_COMPACT: {id, name, short_name, organization_type, country, relationship_status}."""
-    allowed_fields = {"name", "short_name", "name_local", "organization_type", "parent_org_id",
-                     "country", "city", "website", "context", "relationship_status",
-                     "first_contact_date", "is_active", "notes"}
+    allowed_fields = ORG_UPDATE_FIELDS
     updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
 
     if not updates:
@@ -1055,7 +1068,7 @@ async def project_org_list(
 
 async def project_org_update(id: int, **kwargs) -> Optional[dict]:
     """Update project-organization link by id."""
-    allowed_fields = {"org_role", "contract_value", "currency", "is_lead", "start_date", "end_date", "notes"}
+    allowed_fields = PROJECT_ORG_UPDATE_FIELDS
     updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
 
     if not updates:
