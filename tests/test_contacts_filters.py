@@ -62,19 +62,25 @@ async def test_project_id_and_role_name_select_that_projects_team(sql):
     assert params == (5, "%Team Leader%")
 
 
-@pytest.mark.parametrize("filters, says", [
-    ({"organization_id": 5}, "organization_id"),             # never existed
-    ({"is_active": False}, "is_active"),
-    ({"active_only": False}, "active_only"),                 # the views list active contacts only
-    ({"role_name": "Team Leader"}, "project_id"),             # role filters a project's team
-    ({"project_id": 5, "country": "KG"}, "project_id"),       # the team query ignores the rest
-    ({"project_id": 5, "organization": "ADB"}, "project_id"),
+SUPPORTED = ("supported: country, org_type, organization, preferred_channel, project_id, role_name "
+             "(only active contacts are listed)")
+
+
+@pytest.mark.parametrize("filters, error", [
+    # never existed / the views list active contacts only
+    *[({key: False}, f"contact_list: unknown parameter(s) {key}; {SUPPORTED}")
+      for key in ("organization_id", "is_active", "active_only")],
+    # a role filters a project's team
+    ({"role_name": "Team Leader"}, "contact_list: role_name filters a project's team; pass project_id too"),
+    # the team query honours nothing else
+    *[({"project_id": 5, key: "x"},
+       f"contact_list: project_id lists that project's team and cannot be combined with {key}")
+      for key in ("organization", "country", "org_type", "preferred_channel")],
 ])
-async def test_a_filter_the_sql_cannot_honour_is_refused(sql, filters, says):
+async def test_a_filter_the_sql_cannot_honour_is_refused(sql, filters, error):
     result = await manage.contacts([{"op": "contact_list", **filters}])
 
-    error = result["results"][0]["error"]
-    assert says in error
+    assert result["results"][0]["error"] == error
     assert sql == []  # no query ran with a filter dropped
 
 

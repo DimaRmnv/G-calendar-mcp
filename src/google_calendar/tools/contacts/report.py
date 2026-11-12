@@ -368,10 +368,9 @@ async def _report_summary() -> dict:
 
 async def export_contacts_excel(
     filter_params: dict = None,
-    output_path: str = None
 ) -> dict:
     """
-    Export contacts to Excel with all channels.
+    Export contacts to Excel with all channels (written under /data/reports, served by link).
 
     Args:
         filter_params: Optional filters:
@@ -379,10 +378,9 @@ async def export_contacts_excel(
             - org_type: Filter by organization type
             - country: Filter by country
             - project_id: Filter by project assignment
-        output_path: Custom output path (default: ~/Downloads/contacts_export_YYYYMMDD.xlsx)
 
     Returns:
-        Dict with filepath and export stats
+        {contact_count, filters_applied, download_url, expires_in, filename}
     """
     try:
         import openpyxl
@@ -574,17 +572,15 @@ async def export_contacts_excel(
 
 async def export_project_team_excel(
     project_id: int,
-    output_path: str = None
 ) -> dict:
     """
-    Export project team roster to Excel.
+    Export project team roster to Excel (written under /data/reports, served by link).
 
     Args:
         project_id: Project ID
-        output_path: Custom output path
 
     Returns:
-        Dict with filepath and export stats
+        {project, member_count, download_url, expires_in, filename}
     """
     try:
         import openpyxl

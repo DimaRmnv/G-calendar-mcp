@@ -13,7 +13,9 @@ from google_calendar.tools.contacts.database import (
     assignment_add, assignment_get, assignment_list, assignment_update, assignment_delete,
     role_list, role_get,
     get_project_team, get_contact_projects,
+    CONTACT_UPDATE_FIELDS, CHANNEL_UPDATE_FIELDS, ASSIGNMENT_UPDATE_FIELDS,
 )
+from google_calendar.tools.operation_keys import check_keys
 from google_calendar.tools.contacts.lookup import (
     resolve_contact,
     resolve_multiple,
@@ -53,21 +55,70 @@ async def _get_status() -> dict:
     }
 
 
-# Filters the contact_list SQL honours. Anything else is refused before a query runs: a
-# dropped filter returns the unfiltered list as if it had been filtered (issue #7).
+# Filters the contact_list SQL honours (issue #7). Unknown keys are refused by check_keys;
+# the combinations the two queries cannot honour are refused here.
 _CONTACT_FILTERS = ("organization", "country", "org_type", "preferred_channel")
 _TEAM_FILTERS = ("project_id", "role_name")
 
+_ID = frozenset({"id"})
+# Keys each operation reads (besides operation_keys.COMMON_KEYS). Anything else is refused
+# before the operation runs; tests/test_operation_keys.py keeps this table equal to what
+# _execute_operation actually reads.
+_OP_KEYS: dict[str, frozenset[str]] = {
+    "contact_add": frozenset({"first_name", "last_name", "organization_id", "org_notes", "job_title",
+                              "department", "country", "city", "timezone", "preferred_channel",
+                              "preferred_language", "context", "relationship_type",
+                              "relationship_strength", "last_interaction_date", "notes"}),
+    "contact_get": frozenset({"id", "email", "phone", "telegram", "include_channels", "include_projects"}),
+    "contact_list": frozenset(_CONTACT_FILTERS + _TEAM_FILTERS),
+    "contact_update": frozenset({"id", "contact_id"}) | CONTACT_UPDATE_FIELDS,
+    "contact_delete": frozenset({"id", "contact_id"}),
+    "contact_search": frozenset({"query", "limit", "threshold"}),
+    "contact_activate": _ID,
+    "contact_deactivate": _ID,
+    "channel_add": frozenset({"contact_id", "channel_type", "channel_value", "channel_label",
+                              "is_primary", "notes"}),
+    "channel_list": frozenset({"contact_id"}),
+    "channel_get": frozenset({"id", "channel_id"}),
+    "channel_update": frozenset({"id", "channel_id"}) | CHANNEL_UPDATE_FIELDS,
+    "channel_delete": frozenset({"id", "channel_id"}),
+    "channel_set_primary": frozenset({"id", "channel_id"}),
+    "assignment_add": frozenset({"contact_id", "project_id", "role_name", "workdays_allocated",
+                                 "start_date", "end_date", "notes"}),
+    "assignment_get": frozenset({"id", "assignment_id"}),
+    "assignment_list": frozenset({"contact_id", "project_id", "role_name", "active_only"}),
+    "assignment_update": frozenset({"id", "assignment_id"}) | ASSIGNMENT_UPDATE_FIELDS,
+    "assignment_delete": frozenset({"id", "assignment_id"}),
+    "assignment_activate": frozenset({"id", "assignment_id"}),
+    "assignment_deactivate": frozenset({"id", "assignment_id"}),
+    "role_list": frozenset({"category"}),
+    "role_get": frozenset({"code"}),
+    "project_team": frozenset({"project_id"}),
+    "contact_projects": frozenset({"contact_id"}),
+    "contact_resolve": frozenset({"identifier", "context"}),
+    "contact_resolve_multiple": frozenset({"identifiers", "context"}),
+    "contact_preferred_channel": frozenset({"contact", "channel_type", "for_purpose"}),
+    "suggest_enrichment": frozenset({"contact_id", "sources"}),
+    "suggest_new_contacts": frozenset({"period", "sources", "limit"}),
+    "contact_brief": frozenset({"contact_id", "days_back", "days_forward"}),
+    "report": frozenset({"report_type", "organization", "project_id", "days_stale", "limit"}),
+    "export_contacts": frozenset({"filter_params"}),
+    "export_project_team": frozenset({"project_id"}),
+    "init": frozenset(),
+    "status": frozenset(),
+}
+_OP_NOTES = {"contact_list": "only active contacts are listed"}
+# Inner keys of dict-valued parameters, as report.export_contacts_excel and
+# lookup.resolve_contact read them (pinned by tests/test_operation_keys.py).
+_CONTEXT_KEYS = frozenset({"project_id", "organization", "role_name"})
+_NESTED_KEYS = {
+    ("export_contacts", "filter_params"): frozenset({"project_id", "organization", "org_type", "country"}),
+    ("contact_resolve", "context"): _CONTEXT_KEYS,
+    ("contact_resolve_multiple", "context"): _CONTEXT_KEYS,
+}
+
 
 def _check_contact_list_filters(p: dict) -> None:
-    supported = _CONTACT_FILTERS + _TEAM_FILTERS
-    # `account` is not a filter, but callers pass it to every operation.
-    unknown = sorted(set(p) - {"op", "account", *supported})
-    if unknown:
-        raise ValueError(
-            f"contact_list: unknown filter(s) {', '.join(unknown)}; supported: {', '.join(supported)} "
-            "(only active contacts are listed)"
-        )
     if p.get("role_name") and p.get("project_id") is None:
         raise ValueError("contact_list: role_name filters a project's team; pass project_id too")
     mixed = [f for f in _CONTACT_FILTERS if p.get(f)]
@@ -247,15 +298,9 @@ async def _execute_operation(op: str, p: dict) -> dict:
             limit=p.get("limit", 50)
         )
     elif op == "export_contacts":
-        return await export_contacts_excel(
-            filter_params=p.get("filter_params"),
-            output_path=p.get("output_path")
-        )
+        return await export_contacts_excel(filter_params=p.get("filter_params"))
     elif op == "export_project_team":
-        return await export_project_team_excel(
-            project_id=p["project_id"],
-            output_path=p.get("output_path")
-        )
+        return await export_project_team_excel(project_id=p["project_id"])
 
     # System operations
     elif op == "init":
@@ -278,18 +323,24 @@ async def contacts(operations: list[dict]) -> dict:
     contacts-management skill holds data-entry conventions and role
     categories; mcp-orchestration holds channel-routing decisions.
 
+    PARAMETERS: every operation refuses a parameter it does not read; the error lists the
+    supported ones. `account` is accepted everywhere.
+
     CONTACTS:
 
         LIST/SEARCH return COMPACT format (id, name, org, job_title, country, channel).
         Use contact_get(id) for FULL details. Add include_channels/include_projects for related data.
 
-        contact_list    : List active contacts (compact). Filters: organization (name,
-                          partial match), country, org_type, preferred_channel — OR
-                          project_id (+ role_name) for that project's team; the two groups
-                          do not combine. Other keys or combinations are refused.
+        contact_list    : List active contacts (compact). Filters: organization, country,
+                          org_type, preferred_channel — OR project_id (+ role_name) for that
+                          project's team; the two groups do not combine. `organization`
+                          matches part of the organization's name. Other keys or combinations
+                          are refused. Returns: CONTACT_COMPACT[]
+        contact_search  : Search by name/org/job (compact + email + score). Requires: query.
+                          Params: limit (default 20), threshold (fuzzy score, default 60).
                           Returns: CONTACT_COMPACT[]
-        contact_search  : Search by name/org/job (compact + email + score). Returns: CONTACT_COMPACT[]
-        contact_get     : Full details. Params: id, include_channels (bool), include_projects (bool).
+        contact_get     : Full details. Params: id (or email / telegram / phone to look up),
+                          include_channels, include_projects (both default false).
                           Returns: CONTACT_FULL, optionally with channels[] and projects[]
         contact_add     : Create. Requires: first_name, last_name. Returns: CONTACT_COMPACT
         contact_update  : Update. Requires: id. Returns: CONTACT_COMPACT
@@ -297,9 +348,18 @@ async def contacts(operations: list[dict]) -> dict:
 
     QUICK LOOKUP (for messaging):
 
-        contact_resolve          : Find by partial name. Returns: id, display_name, org,
+        contact_resolve          : Find by partial name. Requires: identifier. Params: context,
+                                   an object of project_id, organization, role_name used to
+                                   pick among several matches. Returns: id, display_name, org,
                                    preferred_channel, primary_email, telegram_username
-        contact_resolve_multiple : Batch resolve. Returns: resolved[], unresolved[], stats{}
+        contact_resolve_multiple : Batch resolve. Requires: identifiers. Params: context (as above).
+                                   Returns: resolved[], unresolved[], stats{}
+
+    EXPORT (Excel, download link valid 1 hour):
+
+        export_contacts     : Contacts with channels. Params: filter_params, an object of
+                              organization, org_type, country, project_id.
+        export_project_team : Project roster. Requires: project_id.
 
     PROJECT TEAMS:
 
@@ -316,7 +376,9 @@ async def contacts(operations: list[dict]) -> dict:
 
     ASSIGNMENTS (contact ↔ project roles):
 
-        assignment_list   : Contact's project assignments (compact). Requires: contact_id
+        assignment_list   : Project assignments (compact). Filters: contact_id, project_id,
+                            role_name (partial match), active_only (default true). Give at
+                            least one of contact_id / project_id unless you want all of them.
         assignment_add    : Assign to project. Requires: contact_id, project_id, role_name
         assignment_update : Update. Requires: id
         assignment_delete : Remove. Requires: id. Returns: {deleted, id}
@@ -406,6 +468,7 @@ async def contacts(operations: list[dict]) -> dict:
             op_data = {**op_data, "contact_id": last_contact_id}
 
         try:
+            check_keys(op, op_data, _OP_KEYS, _OP_NOTES, _NESTED_KEYS)
             result = await _execute_operation(op, op_data)
             results.append({"index": i, "op": op, "result": result})
             success_count += 1
