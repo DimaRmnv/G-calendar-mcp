@@ -49,7 +49,10 @@ async def test_each_contact_filter_becomes_a_condition(sql):
 
     assert result["summary"]["errors"] == 0
     query, params = sql[-1]
-    for condition in ("organization_name ILIKE", "org_type =", "country =", "preferred_channel ="):
+    # `organization` follows the shared rule (name, short name or local name: issue #9,
+    # tests/test_organization_match.py).
+    for condition in ("organization_id IN (SELECT id FROM organizations WHERE name ILIKE $1",
+                      "org_type =", "country =", "preferred_channel ="):
         assert condition in query, condition
     assert params == ("%ADB%", "donor", "KG", "email")
 

@@ -28,7 +28,7 @@ from google_calendar.api.client import (
     get_user_timezone,
     handle_auth_errors,
 )
-from google_calendar.api.timeutil import as_aware, has_offset, to_rfc3339
+from google_calendar.api.timeutil import check_bounds, has_offset, to_rfc3339, window_point
 
 
 @handle_auth_errors
@@ -99,7 +99,8 @@ def events(
 
     TIME (list, search): time_min/time_max without an offset ('2025-01-15T10:00:00') and
     period windows are local time in `timezone`, or in the account's calendar timezone
-    when `timezone` is not given. create/update need `timezone` for start/end.
+    when `timezone` is not given. A date ('2025-01-15') is the whole day: time_min from
+    its start, time_max to its end. create/update need `timezone` for start/end.
 
     PAGING (list, search): hasMore=true comes with nextPageToken and the window queried
     (timeMin, timeMax). For the next page pass page_token=nextPageToken,
@@ -260,12 +261,13 @@ def _get_time_range(
 
     `tz` may be None only when both bounds carry an offset.
     """
-    if time_min and time_max:
-        return time_min, time_max
-    if time_min:
-        return time_min, (as_aware(time_min, tz) + _DEFAULT_WINDOW).isoformat()
-    if time_max:
-        return (as_aware(time_max, tz) - _DEFAULT_WINDOW).isoformat(), time_max
+    t_min, t_max = _window_bounds(time_min, time_max, tz)
+    if t_min and t_max:
+        return t_min.isoformat(), t_max.isoformat()
+    if t_min:
+        return t_min.isoformat(), (t_min + _DEFAULT_WINDOW).isoformat()
+    if t_max:
+        return (t_max - _DEFAULT_WINDOW).isoformat(), t_max.isoformat()
 
     now = datetime.now(ZoneInfo(tz))
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -307,6 +309,7 @@ def _list_events(
     account: Optional[str],
 ) -> dict:
     """List events from a calendar."""
+    check_bounds(time_min, time_max)
     tz = timezone or _account_zone_if_needed(time_min, time_max, account)
     t_min, t_max = _get_time_range(time_min, time_max, period, tz)
 
@@ -334,6 +337,16 @@ def _list_events(
         "hasMore": result.get("nextPageToken") is not None,
         "nextPageToken": result.get("nextPageToken"),
     }
+
+
+def _window_bounds(
+    time_min: Optional[str], time_max: Optional[str], tz: Optional[str]
+) -> tuple[Optional[datetime], Optional[datetime]]:
+    """The bounds given as aware datetimes; a date is the whole day (timeutil.window_point)."""
+    return (
+        window_point(time_min, tz, end=False) if time_min else None,
+        window_point(time_max, tz, end=True) if time_max else None,
+    )
 
 
 def _account_zone_if_needed(
@@ -733,20 +746,22 @@ def _search_events(
     account: Optional[str],
 ) -> dict:
     """Search calendar events by text query."""
+    check_bounds(time_min, time_max)
     tz = timezone or _account_zone_if_needed(time_min, time_max, account)
+    t_min, t_max = _window_bounds(time_min, time_max, tz)
 
     # A missing bound reaches a year past the later of (given bound, now) — or before
     # the earlier of them: "since X" keeps covering the next year, a bound far from
     # today never inverts the window.
-    if not time_min or not time_max:
+    if not t_min or not t_max:
         now = datetime.now(ZoneInfo(tz))
-        if time_min:
-            time_max = (max(as_aware(time_min, tz), now) + _SEARCH_SPAN).isoformat()
-        elif time_max:
-            time_min = (min(as_aware(time_max, tz), now) - _SEARCH_SPAN).isoformat()
+        if t_min:
+            t_max = max(t_min, now) + _SEARCH_SPAN
+        elif t_max:
+            t_min = min(t_max, now) - _SEARCH_SPAN
         else:
-            time_min = (now - _SEARCH_SPAN).isoformat()
-            time_max = (now + _SEARCH_SPAN).isoformat()
+            t_min, t_max = now - _SEARCH_SPAN, now + _SEARCH_SPAN
+    time_min, time_max = t_min.isoformat(), t_max.isoformat()
 
     result = api_list_events(
         account=account,

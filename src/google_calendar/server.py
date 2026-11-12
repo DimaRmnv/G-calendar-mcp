@@ -72,7 +72,8 @@ TOOLS (7):
 TIME FORMAT: '2024-12-15T10:00:00' (timed) or '2024-12-15' (all-day).
 Time windows (events list/search time_min/time_max/period, availability) without an
 offset are local time in the call's `timezone`, else in the account's calendar timezone
-(calendars(action="settings")) — never UTC. create/update need `timezone` for start/end.
+(calendars(action="settings")) — never UTC. A date bound ('2024-12-15') is the whole day:
+time_min from its start, time_max to its end. create/update need `timezone` for start/end.
 PAGING: events list/search return the window queried (timeMin, timeMax) and, when
 hasMore, nextPageToken; pass page_token, time_min and time_max back for the next page."""
 )

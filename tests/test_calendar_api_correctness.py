@@ -858,3 +858,189 @@ def test_find_slots_names_a_calendar_missing_from_googles_answer(fake):
 
     assert result["unchecked_calendars"] == {UNREADABLE: ["missingFromResponse"]}
     assert UNREADABLE in result["warning"]
+
+
+# --------------------------------------------------------------------------
+# 6. A date as a window bound is the whole day on the account's clock
+# --------------------------------------------------------------------------
+# A date ('2026-11-09') used to be refused with "Expected datetime, got date" by
+# events list/search and availability query, although find_slots took it. Now every
+# window bound reads a date the same way: the start bound is that day's midnight, the
+# end bound the next midnight (Google's timeMax is exclusive), in `timezone` or the
+# account's calendar timezone.
+
+def test_list_reads_date_bounds_as_whole_local_days(fake):
+    fake.respond("events", "list", {"items": [event("training")]})
+
+    result = events(action="list", account="work", time_min="2026-11-09", time_max="2026-11-10")
+
+    sent = fake.params("events", "list")[-1]
+    assert (sent["timeMin"], sent["timeMax"]) == ("2026-11-09T00:00:00+02:00",
+                                                  "2026-11-11T00:00:00+02:00")
+    assert (result["timeMin"], result["timeMax"]) == (sent["timeMin"], sent["timeMax"])
+    assert [e["id"] for e in result["events"]] == ["training"]
+
+
+def test_list_reads_a_date_in_an_explicit_timezone(fake):
+    fake.respond("events", "list", {"items": []})
+
+    events(action="list", account="work", timezone="Asia/Bangkok",
+           time_min="2026-11-09", time_max="2026-11-09")
+
+    sent = fake.params("events", "list")[-1]
+    assert (sent["timeMin"], sent["timeMax"]) == ("2026-11-09T00:00:00+07:00",
+                                                  "2026-11-10T00:00:00+07:00")
+
+
+def test_a_date_bound_follows_the_local_clock_across_a_dst_change(fake):
+    fake.respond("settings", "get", {"value": "Europe/Berlin"})  # DST ends 2026-10-25
+    fake.respond("events", "list", {"items": []})
+
+    events(action="list", account="work", time_min="2026-10-25", time_max="2026-10-25")
+
+    sent = fake.params("events", "list")[-1]
+    assert (sent["timeMin"], sent["timeMax"]) == ("2026-10-25T00:00:00+02:00",
+                                                  "2026-10-26T00:00:00+01:00")
+
+
+@pytest.mark.parametrize("bound, expected", [
+    ({"time_min": "2026-11-20"}, ("2026-11-20T00:00:00+02:00", "2026-11-27T00:00:00+02:00")),
+    # "until the 20th" includes the 20th
+    ({"time_max": "2026-11-20"}, ("2026-11-14T00:00:00+02:00", "2026-11-21T00:00:00+02:00")),
+])
+def test_one_date_bound_opens_a_seven_day_window(fake, bound, expected):
+    fake.respond("events", "list", {"items": []})
+
+    events(action="list", account="work", **bound)
+
+    sent = fake.params("events", "list")[-1]
+    assert (sent["timeMin"], sent["timeMax"]) == expected
+
+
+def test_a_date_bound_mixes_with_a_datetime_bound(fake):
+    fake.respond("events", "list", {"items": []})
+
+    events(action="list", account="work", time_min="2026-11-09T08:00:00Z", time_max="2026-11-10")
+
+    sent = fake.params("events", "list")[-1]
+    assert (sent["timeMin"], sent["timeMax"]) == ("2026-11-09T08:00:00+00:00",
+                                                  "2026-11-11T00:00:00+02:00")
+
+
+@pytest.mark.parametrize("bound, expected", [
+    ({"time_min": "2026-11-09", "time_max": "2026-11-10"},
+     ("2026-11-09T00:00:00+02:00", "2026-11-11T00:00:00+02:00")),
+    ({"time_min": "2025-03-01"}, ("2025-03-01T00:00:00+02:00", "2027-11-12T17:30:00+02:00")),
+    ({"time_max": "2020-06-01"}, ("2019-06-03T00:00:00+02:00", "2020-06-02T00:00:00+02:00")),
+])
+def test_search_reads_date_bounds_as_whole_local_days(fake, frozen_now, bound, expected):
+    fake.respond("events", "list", {"items": []})
+
+    result = events(action="search", account="work", query="x", **bound)
+
+    sent = fake.params("events", "list")[-1]
+    assert (sent["timeMin"], sent["timeMax"]) == expected
+    assert (result["timeMin"], result["timeMax"]) == expected
+
+
+def test_the_window_of_a_date_query_is_handed_back_for_the_next_page(fake):
+    fake.respond("events", "list", {"items": [event("a")], "nextPageToken": "p2"})
+
+    first = events(action="list", account="work", time_min="2026-11-09", time_max="2026-11-10")
+    events(action="list", account="work", page_token=first["nextPageToken"],
+           time_min=first["timeMin"], time_max=first["timeMax"])
+
+    pages = fake.params("events", "list")
+    assert (pages[-1]["timeMin"], pages[-1]["timeMax"]) == (pages[0]["timeMin"], pages[0]["timeMax"])
+    assert pages[-1]["pageToken"] == "p2"
+
+
+def test_freebusy_query_reads_date_bounds_as_whole_local_days(fake):
+    fake.respond("freebusy", "query", {"calendars": {"primary": {"busy": []}}})
+
+    availability(action="query", account="work", time_min="2026-11-12", time_max="2026-11-12")
+
+    body = fake.params("freebusy", "query")[-1]["body"]
+    assert (body["timeMin"], body["timeMax"]) == ("2026-11-12T00:00:00+02:00",
+                                                  "2026-11-13T00:00:00+02:00")
+
+
+def test_find_slots_reads_date_bounds_by_the_same_rule(fake):
+    fake.respond("freebusy", "query", {"calendars": {"primary": {"busy": []}}})
+
+    result = availability(action="find_slots", account="work", duration_minutes=60,
+                          time_min="2026-11-16", time_max="2026-11-16", max_slots=20)
+
+    body = fake.params("freebusy", "query")[-1]["body"]
+    assert (body["timeMin"], body["timeMax"]) == ("2026-11-16T00:00:00+02:00",
+                                                  "2026-11-17T00:00:00+02:00")
+    starts = [s["start"] for s in result["slots"]]
+    assert starts[0] == "2026-11-16T09:00:00+02:00"
+    assert starts[-1] == "2026-11-16T17:00:00+02:00"  # the last hour of the working day
+    assert len(starts) == 9
+
+
+BERLIN = "Europe/Berlin"  # summer time ends 2026-10-25, starts 2019-03-31 and 2027-03-28
+
+
+@pytest.mark.parametrize("bound, expected", [
+    # local datetime: the 7 days are counted on Berlin's clock, as before this change
+    ({"time_min": "2026-10-20T09:00:00"}, ("2026-10-20T09:00:00+02:00", "2026-10-27T09:00:00+01:00")),
+    ({"time_max": "2026-10-28T00:00:00"}, ("2026-10-21T00:00:00+02:00", "2026-10-28T00:00:00+01:00")),
+    # date: local midnight to local midnight
+    ({"time_min": "2026-10-20"}, ("2026-10-20T00:00:00+02:00", "2026-10-27T00:00:00+01:00")),
+    ({"time_max": "2026-10-27"}, ("2026-10-21T00:00:00+02:00", "2026-10-28T00:00:00+01:00")),
+    # a bound with its own offset keeps that offset, as before this change
+    ({"time_min": "2026-10-20T09:00:00+02:00"}, ("2026-10-20T09:00:00+02:00", "2026-10-27T09:00:00+02:00")),
+])
+def test_one_bound_list_window_is_counted_on_the_local_clock_across_dst(fake, bound, expected):
+    fake.respond("settings", "get", {"value": BERLIN})
+    fake.respond("events", "list", {"items": []})
+
+    result = events(action="list", account="work", **bound)
+
+    sent = fake.params("events", "list")[-1]
+    assert (sent["timeMin"], sent["timeMax"]) == expected
+    assert (result["timeMin"], result["timeMax"]) == expected
+
+
+@pytest.mark.parametrize("bound, expected", [
+    ({"time_min": "2027-03-27T12:00:00"}, ("2027-03-27T12:00:00+01:00", "2028-03-26T12:00:00+02:00")),
+    ({"time_max": "2020-03-29"}, ("2019-03-31T00:00:00+01:00", "2020-03-30T00:00:00+02:00")),
+])
+def test_one_bound_search_year_is_counted_on_the_local_clock_across_dst(fake, frozen_now, bound, expected):
+    fake.respond("settings", "get", {"value": BERLIN})
+    fake.respond("events", "list", {"items": []})
+
+    result = events(action="search", account="work", query="x", **bound)
+
+    sent = fake.params("events", "list")[-1]
+    assert (sent["timeMin"], sent["timeMax"]) == expected
+    assert (result["timeMin"], result["timeMax"]) == expected
+
+
+MALFORMED = ["2026-13-01", "2026-11-31", "yesterday", "2026/11/09", "2026-11-09T25:00:00"]
+
+
+@pytest.mark.parametrize("bad", MALFORMED)
+@pytest.mark.parametrize("call", [
+    lambda b: events(action="list", account="work", time_min=b, time_max="2026-11-30"),
+    lambda b: events(action="list", account="work", time_max=b),
+    lambda b: events(action="search", account="work", query="x", time_min=b),
+    lambda b: availability(action="query", account="work", time_min="2026-11-01", time_max=b),
+    lambda b: availability(action="find_slots", account="work", duration_minutes=30,
+                           time_min=b, time_max="2026-11-30"),
+], ids=["list", "list-one-bound", "search", "query", "find_slots"])
+def test_a_malformed_bound_is_refused_before_anything_is_asked_of_google(fake, bad, call):
+    with pytest.raises(ValueError, match=re.escape(f"Invalid time bound {bad!r}")):
+        call(bad)
+
+    assert fake.calls == []  # not even the account timezone lookup
+
+
+def test_window_bound_without_a_timezone_refuses_a_date():
+    from google_calendar.api.timeutil import window_bound
+
+    with pytest.raises(ValueError, match="No timezone to interpret the date 2026-11-09"):
+        window_bound("2026-11-09", None, end=False)
+    assert window_bound("2026-11-09T10:00:00Z", None, end=True) == "2026-11-09T10:00:00+00:00"
