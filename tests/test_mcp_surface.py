@@ -12,6 +12,7 @@ config, which is pointed at an empty temp HOME.
 """
 from __future__ import annotations
 
+import inspect
 import json
 
 import pytest
@@ -43,6 +44,19 @@ async def test_all_tools_are_listed_with_schemas():
     assert set(tools) == EXPECTED_TOOLS
     for name in ("calendars", "availability", "events", "attendees"):
         assert "action" in tools[name].input_schema["properties"], name
+
+
+async def test_tools_carry_their_full_docstring():
+    # The docstrings are the model's only manual (actions, account rules, examples).
+    # fastmcp 4 keeps just the text before the first section header unless told otherwise.
+    import google_calendar.server as server
+
+    async with Client(mcp) as client:
+        tools = {t.name: t for t in await client.list_tools()}
+
+    for name in sorted(EXPECTED_TOOLS):
+        assert tools[name].description == inspect.getdoc(getattr(server, name)), name
+        assert tools[name].output_schema is not None, name
 
 
 async def test_tool_call_round_trip():
