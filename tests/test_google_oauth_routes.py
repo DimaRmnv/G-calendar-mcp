@@ -172,6 +172,20 @@ def test_a_client_secret_without_a_client_id_leaves_the_whole_server_open(client
     assert client.get("/mcp/calendar/oauth/start/work").status_code == 302
 
 
+def test_a_connector_client_alone_still_protects_the_server(client, monkeypatch):
+    # Client id + secret without an API key is an authenticated server: the middleware
+    # must not fall back to "API key only" and serve account e-mails anonymously.
+    monkeypatch.setattr(settings, "api_key", None)
+    monkeypatch.setattr(settings, "oauth_client_id", "mcp-client")
+    monkeypatch.setattr(settings, "oauth_client_secret", "mcp-secret")
+
+    accounts = client.get("/mcp/calendar/oauth/accounts")
+
+    assert accounts.status_code == 401
+    assert OWNER not in accounts.text
+    assert client.get("/mcp/calendar/oauth/start/work").status_code == 403
+
+
 def test_auth_urls_handed_out_by_the_server_are_signed_links(client):
     url = settings.get_auth_start_url("work")
 
