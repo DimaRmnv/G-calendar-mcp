@@ -67,17 +67,22 @@ def _function(module, name):
 
 
 def _keys_read(nodes, var: str) -> set[str]:
-    """Constant keys read from `var` via var.get("k") or var["k"]."""
+    """Keys read from `var` via var.get("k") or var["k"]; a non-literal key fails the test."""
     keys: set[str] = set()
     for stmt in nodes:
         for n in ast.walk(stmt):
+            key = None
             if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
                     and isinstance(n.func.value, ast.Name) and n.func.value.id == var
-                    and n.func.attr == "get" and isinstance(n.args[0], ast.Constant)):
-                keys.add(n.args[0].value)
-            if (isinstance(n, ast.Subscript) and isinstance(n.value, ast.Name)
-                    and n.value.id == var and isinstance(n.slice, ast.Constant)):
-                keys.add(n.slice.value)
+                    and n.func.attr == "get"):
+                key = n.args[0]
+            elif isinstance(n, ast.Subscript) and isinstance(n.value, ast.Name) and n.value.id == var:
+                key = n.slice
+            if key is None:
+                continue
+            assert isinstance(key, ast.Constant) and isinstance(key.value, str), (
+                f"{var} read with a non-literal key: {ast.unparse(n)}; the key tables cannot follow it")
+            keys.add(key.value)
     return keys
 
 
@@ -167,49 +172,80 @@ def recorded_sql(monkeypatch):
     return sent
 
 
-def _value(column: str):
+_CHOICES = {"preferred_channel": "email", "relationship_strength": "moderate",
+            "organization_type": "donor", "role_category": "management",
+            "relationship_status": "active"}
+
+
+def _value(column: str, falsy: bool):
+    """A valid value for `column`; with falsy=True, False / 0 / "" wherever the column allows."""
     if column.endswith("_date"):
         return "2026-01-01"
+    if column in _CHOICES:
+        return _CHOICES[column]
     if column.startswith("is_"):
-        return True
-    if column.endswith("_id") or column in ("structure_level", "workdays_allocated", "contract_value"):
+        return not falsy
+    if column in ("contract_value", "workdays_allocated"):
+        return 0 if falsy else 1
+    if column.endswith("_id") or column == "structure_level":
         return 1
-    return {"preferred_channel": "email", "relationship_strength": "moderate",
-            "organization_type": "donor", "role_category": "management",
-            "relationship_status": "active"}.get(column, "x")
+    return "" if falsy else "x"
 
 
+@pytest.mark.parametrize("falsy", [False, True], ids=["truthy", "falsy"])
 @pytest.mark.parametrize("module, op", [
     pytest.param(m, op, id=op) for m in (projects, contacts) for op in sorted(PASSTHROUGH[m])
 ])
-async def test_every_accepted_update_column_reaches_the_sql(recorded_sql, module, op):
+async def test_every_accepted_update_column_reaches_the_sql(recorded_sql, module, op, falsy):
+    # False, 0 and "" are real values (clear a flag, zero an amount, empty a note), not "absent".
     columns = PASSTHROUGH[module][op]
     target = {"role_update": {"role_code": "pm"}}.get(op, {"id": 1})
+    values = {c: _value(c, falsy) for c in columns}
 
-    await module._execute_operation(op, {"op": op, **target, **{c: _value(c) for c in columns}})
+    await module._execute_operation(op, {"op": op, **target, **values})
 
     updates = " ".join(q for q in recorded_sql if q.lstrip().upper().startswith("UPDATE"))
     missing = sorted(c for c in columns if not re.search(rf"\b{c}\s*=\s*\$", updates))
     assert missing == []
 
 
-@pytest.mark.parametrize("table", sorted({
-    "projects", "phases", "tasks", "organizations", "project_organizations", "project_roles",
-    "contacts", "contact_channels", "contact_projects"}))
-def test_updatable_columns_exist_in_the_schema(table):
-    fields = {
-        "projects": projects_db.PROJECT_UPDATE_FIELDS, "phases": projects_db.PHASE_UPDATE_FIELDS,
-        "tasks": projects_db.TASK_UPDATE_FIELDS, "organizations": projects_db.ORG_UPDATE_FIELDS,
-        "project_organizations": projects_db.PROJECT_ORG_UPDATE_FIELDS,
-        "project_roles": projects.ROLE_UPDATE_FIELDS, "contacts": contacts_db.CONTACT_UPDATE_FIELDS,
-        "contact_channels": contacts_db.CHANNEL_UPDATE_FIELDS,
-        "contact_projects": contacts_db.ASSIGNMENT_UPDATE_FIELDS,
-    }[table]
+# The tool API: which columns each update may change. Pinned so a column cannot silently
+# drop out of (or creep into) an update; each must also be a real column of its table.
+UPDATABLE = {
+    "projects": (projects_db.PROJECT_UPDATE_FIELDS, {
+        "code", "description", "is_billable", "is_active", "structure_level", "full_name",
+        "country", "sector", "start_date", "end_date", "contract_value", "currency", "context"}),
+    "phases": (projects_db.PHASE_UPDATE_FIELDS, {"code", "description"}),
+    "tasks": (projects_db.TASK_UPDATE_FIELDS, {"code", "description", "phase_id", "project_id"}),
+    "organizations": (projects_db.ORG_UPDATE_FIELDS, {
+        "name", "short_name", "name_local", "organization_type", "parent_org_id", "country",
+        "city", "website", "context", "relationship_status", "first_contact_date", "is_active",
+        "notes"}),
+    "project_organizations": (projects_db.PROJECT_ORG_UPDATE_FIELDS, {
+        "org_role", "contract_value", "currency", "is_lead", "start_date", "end_date", "notes"}),
+    "project_roles": (projects.ROLE_UPDATE_FIELDS, {
+        "role_name_en", "role_name_ru", "role_category", "description"}),
+    "contacts": (contacts_db.CONTACT_UPDATE_FIELDS, {
+        "first_name", "last_name", "organization_id", "org_notes", "job_title", "department",
+        "country", "city", "timezone", "preferred_channel", "preferred_language", "context",
+        "relationship_type", "relationship_strength", "last_interaction_date", "notes",
+        "is_active"}),
+    "contact_channels": (contacts_db.CHANNEL_UPDATE_FIELDS, {
+        "channel_value", "channel_label", "is_primary", "notes"}),
+    "contact_projects": (contacts_db.ASSIGNMENT_UPDATE_FIELDS, {
+        "role_name", "start_date", "end_date", "is_active", "workdays_allocated", "notes"}),
+}
+
+
+@pytest.mark.parametrize("table", sorted(UPDATABLE))
+def test_updatable_columns_are_the_pinned_set_of_real_columns(table):
+    fields, pinned = UPDATABLE[table]
     schema = (Path(db_package.__file__).parent / "schema.sql").read_text()
     body = re.search(rf"CREATE TABLE IF NOT EXISTS {table} \((.*?)\n\);", schema, re.S).group(1)
     columns = {line.split()[0] for line in body.splitlines() if line.strip()
                and not line.strip().startswith(("--", "CONSTRAINT", "UNIQUE", "PRIMARY", "CHECK", "FOREIGN"))}
 
+    assert set(fields) == pinned
     assert set(fields) <= columns
 
 
@@ -217,21 +253,41 @@ def test_updatable_columns_exist_in_the_schema(table):
 # The docstrings teach no key the tables refuse
 # ---------------------------------------------------------------------------
 
-_ENTRY = re.compile(r"^\s{4,}([a-z_/]+)\s*:\s*(.+(?:\n\s{20,}.+)*)", re.M)
 # Prose inside Requires/Params/Filters segments. Anything else there must be a real key:
-# add a word here only if it is English, never a parameter name.
+# add a word here only if it is English and no operation takes it (pinned below).
 _PROSE = {
-    "or", "and", "default", "true", "false", "both", "partial", "match", "name", "fuzzy",
+    "or", "and", "default", "true", "false", "both", "partial", "match", "fuzzy",
     "score", "to", "look", "up", "as", "above", "an", "object", "of", "used", "pick", "among",
     "several", "matches", "for", "that", "project", "s", "team", "the", "two", "groups", "do",
     "not", "combine", "give", "at", "least", "one", "unless", "you", "want", "all", "them",
 }
 
 
+def test_no_prose_word_is_a_real_parameter():
+    keys = set().union(*(set(m._OP_KEYS[op]) for m in (projects, contacts) for op in m._OP_KEYS))
+    keys |= set().union(*contacts._NESTED_KEYS.values())
+
+    assert _PROSE & keys == set()
+
+
+def _entries(doc: str) -> list[tuple[str, str]]:
+    """(names, text) per `    name : text` entry; every deeper-indented line continues it."""
+    entries: list[tuple[str, str]] = []
+    for line in doc.splitlines():
+        head = re.match(r"^ {4}([a-z_/]+)\s*:\s*(.*)$", line)
+        if head:
+            entries.append((head.group(1), head.group(2)))
+        elif entries and re.match(r"^ {5,}\S", line):
+            entries[-1] = (entries[-1][0], entries[-1][1] + " " + line.strip())
+        else:
+            entries.append(("", ""))  # blank or shallower line ends the entry
+    return [e for e in entries if e[0]]
+
+
 def _taught(module) -> list[tuple[str, str]]:
     doc = inspect.getdoc(TOOL[module])
     taught: list[tuple[str, str]] = []
-    for names, text in _ENTRY.findall(doc):
+    for names, text in _entries(doc):
         ops = [op for op in names.split("/") if op in module._OP_KEYS]
         for segment in re.findall(r"(?:Requires|Params|Filters):\s*([^.]+)", text):
             for word in re.findall(r"\b[a-z_]+\b", segment):
@@ -314,18 +370,31 @@ async def test_an_unknown_operation_never_runs(ran, module, op):
     assert ran == []
 
 
+def _required(op):
+    return {"contact_resolve": {"identifier": "x"},
+            "contact_resolve_multiple": {"identifiers": ["x"]}}.get(op, {})
+
+
 @pytest.mark.parametrize("op, param", sorted(contacts._NESTED_KEYS))
 async def test_nested_parameters_refuse_unknown_inner_keys(ran, op, param):
-    required = {"contact_resolve": {"identifier": "x"},
-                "contact_resolve_multiple": {"identifiers": ["x"]}}.get(op, {})
     known = dict.fromkeys(contacts._NESTED_KEYS[(op, param)], 1)
 
-    bad_key = await contacts.contacts([{"op": op, **required, param: {"organization_id": 5}}])
-    not_an_object = await contacts.contacts([{"op": op, **required, param: "UNDP"}])
-    good = await contacts.contacts([{"op": op, **required, param: known}])
+    bad_key = await contacts.contacts([{"op": op, **_required(op), param: {"organization_id": 5}}])
+    good = await contacts.contacts([{"op": op, **_required(op), param: known}])
+    absent = await contacts.contacts([{"op": op, **_required(op), param: None}])
 
     assert bad_key["results"][0]["error"].startswith(
         f"{op}: unknown {param} key(s) organization_id; supported: ")
-    assert not_an_object["results"][0]["error"].startswith(f"{op}: {param} must be an object")
     assert "error" not in good["results"][0]
-    assert ran == [op]
+    assert "error" not in absent["results"][0]
+    assert ran == [op, op]
+
+
+@pytest.mark.parametrize("value", ["UNDP", "", [], False, 0], ids=repr)
+@pytest.mark.parametrize("op, param", sorted(contacts._NESTED_KEYS))
+async def test_a_nested_parameter_that_is_not_an_object_is_refused(ran, op, param, value):
+    # Falsy non-objects too: treated like "absent" they would run the operation unfiltered.
+    result = await contacts.contacts([{"op": op, **_required(op), param: value}])
+
+    assert result["results"][0]["error"].startswith(f"{op}: {param} must be an object")
+    assert ran == []

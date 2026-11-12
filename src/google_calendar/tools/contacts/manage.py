@@ -331,11 +331,11 @@ async def contacts(operations: list[dict]) -> dict:
         LIST/SEARCH return COMPACT format (id, name, org, job_title, country, channel).
         Use contact_get(id) for FULL details. Add include_channels/include_projects for related data.
 
-        contact_list    : List active contacts (compact). Filters: organization (name,
-                          partial match), country, org_type, preferred_channel — OR
-                          project_id (+ role_name) for that project's team; the two groups
-                          do not combine. Other keys or combinations are refused.
-                          Returns: CONTACT_COMPACT[]
+        contact_list    : List active contacts (compact). Filters: organization, country,
+                          org_type, preferred_channel — OR project_id (+ role_name) for that
+                          project's team; the two groups do not combine. `organization`
+                          matches part of the organization's name. Other keys or combinations
+                          are refused. Returns: CONTACT_COMPACT[]
         contact_search  : Search by name/org/job (compact + email + score). Requires: query.
                           Params: limit (default 20), threshold (fuzzy score, default 60).
                           Returns: CONTACT_COMPACT[]

@@ -380,7 +380,7 @@ async def export_contacts_excel(
             - project_id: Filter by project assignment
 
     Returns:
-        Dict with filepath and export stats
+        {contact_count, filters_applied, download_url, expires_in, filename}
     """
     try:
         import openpyxl
@@ -580,7 +580,7 @@ async def export_project_team_excel(
         project_id: Project ID
 
     Returns:
-        Dict with filepath and export stats
+        {project, member_count, download_url, expires_in, filename}
     """
     try:
         import openpyxl
