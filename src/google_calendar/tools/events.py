@@ -28,7 +28,7 @@ from google_calendar.api.client import (
     get_user_timezone,
     handle_auth_errors,
 )
-from google_calendar.api.timeutil import as_aware, has_offset, to_rfc3339
+from google_calendar.api.timeutil import as_aware, has_offset, to_rfc3339, window_bound
 
 
 @handle_auth_errors
@@ -99,7 +99,8 @@ def events(
 
     TIME (list, search): time_min/time_max without an offset ('2025-01-15T10:00:00') and
     period windows are local time in `timezone`, or in the account's calendar timezone
-    when `timezone` is not given. create/update need `timezone` for start/end.
+    when `timezone` is not given. A date ('2025-01-15') is the whole day: time_min from
+    its start, time_max to its end. create/update need `timezone` for start/end.
 
     PAGING (list, search): hasMore=true comes with nextPageToken and the window queried
     (timeMin, timeMax). For the next page pass page_token=nextPageToken,
@@ -308,6 +309,7 @@ def _list_events(
 ) -> dict:
     """List events from a calendar."""
     tz = timezone or _account_zone_if_needed(time_min, time_max, account)
+    time_min, time_max = _window_bounds(time_min, time_max, tz)
     t_min, t_max = _get_time_range(time_min, time_max, period, tz)
 
     result = api_list_events(
@@ -334,6 +336,16 @@ def _list_events(
         "hasMore": result.get("nextPageToken") is not None,
         "nextPageToken": result.get("nextPageToken"),
     }
+
+
+def _window_bounds(
+    time_min: Optional[str], time_max: Optional[str], tz: Optional[str]
+) -> tuple[Optional[str], Optional[str]]:
+    """The bounds given, a date read as the whole day (see timeutil.window_bound)."""
+    return (
+        window_bound(time_min, tz, end=False) if time_min else None,
+        window_bound(time_max, tz, end=True) if time_max else None,
+    )
 
 
 def _account_zone_if_needed(
@@ -734,6 +746,7 @@ def _search_events(
 ) -> dict:
     """Search calendar events by text query."""
     tz = timezone or _account_zone_if_needed(time_min, time_max, account)
+    time_min, time_max = _window_bounds(time_min, time_max, tz)
 
     # A missing bound reaches a year past the later of (given bound, now) — or before
     # the earlier of them: "since X" keeps covering the next year, a bound far from

@@ -15,6 +15,8 @@ from typing import Optional
 
 from google_calendar.db.connection import get_db
 
+from .database import org_condition, org_pattern
+
 
 # Base URL for download links (from env, fallback for local dev)
 EXPORT_BASE_URL = os.environ.get("EXPORT_BASE_URL", "http://localhost:8000")
@@ -38,7 +40,7 @@ async def contacts_report(
             - 'stale_contacts': Contacts not updated in X days
             - 'summary': Overall contacts summary
         project_id: Required for project_team report
-        organization: Filter for organization report
+        organization: Filter for organization report — part of the name, short name or local name
         days_stale: Days threshold for stale_contacts (default 90)
         limit: Max results (default 50)
 
@@ -141,7 +143,7 @@ async def _report_by_organization(organization: str = None, limit: int = 50) -> 
     async with get_db() as conn:
         if organization:
             # Single organization
-            contacts_raw = await conn.fetch("""
+            contacts_raw = await conn.fetch(f"""
                 SELECT
                     c.id, c.first_name, c.last_name,
                     o.name as organization,
@@ -150,10 +152,10 @@ async def _report_by_organization(organization: str = None, limit: int = 50) -> 
                     c.preferred_channel
                 FROM contacts c
                 LEFT JOIN organizations o ON c.organization_id = o.id
-                WHERE o.name = $1 OR o.name ILIKE $2
+                WHERE {org_condition("c.organization_id", "$1")}
                 ORDER BY c.last_name, c.first_name
-                LIMIT $3
-            """, organization, f"%{organization}%", limit)
+                LIMIT $2
+            """, org_pattern(organization), limit)
 
             contacts = [dict(row) for row in contacts_raw]
 
@@ -374,7 +376,7 @@ async def export_contacts_excel(
 
     Args:
         filter_params: Optional filters:
-            - organization: Filter by organization name
+            - organization: Filter by part of the organization's name, short name or local name
             - org_type: Filter by organization type
             - country: Filter by country
             - project_id: Filter by project assignment
@@ -421,8 +423,8 @@ async def export_contacts_excel(
             param_idx += 1
 
         if filter_params.get('organization'):
-            conditions.append(f"o.name ILIKE ${param_idx}")
-            params.append(f"%{filter_params['organization']}%")
+            conditions.append(org_condition("c.organization_id", f"${param_idx}"))
+            params.append(org_pattern(filter_params['organization']))
             param_idx += 1
 
         if filter_params.get('org_type'):

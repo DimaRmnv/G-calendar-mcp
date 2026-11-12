@@ -334,8 +334,8 @@ async def contacts(operations: list[dict]) -> dict:
         contact_list    : List active contacts (compact). Filters: organization, country,
                           org_type, preferred_channel — OR project_id (+ role_name) for that
                           project's team; the two groups do not combine. `organization`
-                          matches part of the organization's name. Other keys or combinations
-                          are refused. Returns: CONTACT_COMPACT[]
+                          matches part of the organization's name, short name or local name.
+                          Other keys or combinations are refused. Returns: CONTACT_COMPACT[]
         contact_search  : Search by name/org/job (compact + email + score). Requires: query.
                           Params: limit (default 20), threshold (fuzzy score, default 60).
                           Returns: CONTACT_COMPACT[]
@@ -350,7 +350,9 @@ async def contacts(operations: list[dict]) -> dict:
 
         contact_resolve          : Find by partial name. Requires: identifier. Params: context,
                                    an object of project_id, organization, role_name used to
-                                   pick among several matches. Returns: id, display_name, org,
+                                   pick among several matches. Its organization matches
+                                   part of the name, short name or local name.
+                                   Returns: id, display_name, org,
                                    preferred_channel, primary_email, telegram_username
         contact_resolve_multiple : Batch resolve. Requires: identifiers. Params: context (as above).
                                    Returns: resolved[], unresolved[], stats{}
@@ -358,7 +360,8 @@ async def contacts(operations: list[dict]) -> dict:
     EXPORT (Excel, download link valid 1 hour):
 
         export_contacts     : Contacts with channels. Params: filter_params, an object of
-                              organization, org_type, country, project_id.
+                              organization, org_type, country, project_id. Its organization
+                              matches part of the name, short name or local name.
         export_project_team : Project roster. Requires: project_id.
 
     PROJECT TEAMS:

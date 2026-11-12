@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 from google_calendar.api.freebusy import get_freebusy as api_get_freebusy
 from google_calendar.api.client import get_user_timezone, handle_auth_errors
+from google_calendar.api.timeutil import window_bound
 
 
 @handle_auth_errors
@@ -39,9 +40,9 @@ def availability(
         query: Free/busy status. Returns busy blocks only — gaps are free time.
         find_slots: Available meeting slots respecting working hours across timezones.
 
-    Required: time_min, time_max — ISO datetime for query; datetime or date for
-    find_slots. A time without an offset is local time in `timezone`, or in the
-    account's calendar timezone when not given.
+    Required: time_min, time_max — ISO datetime or date. A time without an offset is
+    local time in `timezone`, or in the account's calendar timezone when not given. A
+    date is the whole day: time_min from its start, time_max to its end.
 
     Params for query:
         calendars: List of calendar IDs. Default ['primary']
@@ -111,8 +112,8 @@ def _query_freebusy(
 
     # Call API
     result = api_get_freebusy(
-        time_min=time_min,
-        time_max=time_max,
+        time_min=window_bound(time_min, timezone, end=False),
+        time_max=window_bound(time_max, timezone, end=True),
         calendars=calendars,
         account=account,
         timezone=timezone,
@@ -157,24 +158,10 @@ def _find_meeting_slots(
     if not calendars:
         calendars = ["primary"]
 
-    # Parse date range
+    # Parse date range (a date is the whole day, as for every window: timeutil.window_bound)
     tz = ZoneInfo(timezone)
-
-    if "T" in date_range_start:
-        range_start = datetime.fromisoformat(date_range_start.replace("Z", "+00:00"))
-        if range_start.tzinfo is None:
-            range_start = range_start.replace(tzinfo=tz)
-    else:
-        range_start = datetime.strptime(date_range_start, "%Y-%m-%d").replace(tzinfo=tz)
-
-    if "T" in date_range_end:
-        range_end = datetime.fromisoformat(date_range_end.replace("Z", "+00:00"))
-        if range_end.tzinfo is None:
-            range_end = range_end.replace(tzinfo=tz)
-    else:
-        range_end = datetime.strptime(date_range_end, "%Y-%m-%d").replace(
-            hour=23, minute=59, second=59, tzinfo=tz
-        )
+    range_start = datetime.fromisoformat(window_bound(date_range_start, timezone, end=False))
+    range_end = datetime.fromisoformat(window_bound(date_range_end, timezone, end=True))
 
     # Get busy times
     freebusy_result = api_get_freebusy(

@@ -28,6 +28,31 @@ CONTACT_UPDATE_FIELDS = frozenset({
     'relationship_type', 'relationship_strength', 'last_interaction_date', 'notes', 'is_active',
 })
 CHANNEL_UPDATE_FIELDS = frozenset({'channel_value', 'channel_label', 'is_primary', 'notes'})
+
+# One rule for every organization filter of the contacts tool (issue #9): part of the
+# organization's name, short name or local name, in any case. Matching ids through a
+# subquery works on every table and view that carries organization_id.
+ORG_MATCH = (
+    "SELECT id FROM organizations WHERE name ILIKE {p} "
+    "OR short_name ILIKE {p} OR name_local ILIKE {p}"
+)
+
+
+def org_pattern(organization: str) -> str:
+    """The ILIKE pattern for part of an organization's name."""
+    return f"%{organization}%"
+
+
+def org_condition(column: str, placeholder: str) -> str:
+    """SQL condition: `column` (an organization_id) is a matching organization's id."""
+    return f"{column} IN ({ORG_MATCH.format(p=placeholder)})"
+
+
+async def organization_ids_matching(organization: str) -> set[int]:
+    """Ids of the organizations matching `organization` by ORG_MATCH."""
+    async with get_db() as conn:
+        rows = await conn.fetch(ORG_MATCH.format(p="$1"), org_pattern(organization))
+    return {row["id"] for row in rows}
 ASSIGNMENT_UPDATE_FIELDS = frozenset({
     'role_name', 'start_date', 'end_date', 'is_active', 'workdays_allocated', 'notes',
 })
@@ -314,8 +339,8 @@ async def contact_list(
             param_idx = 1
 
             if organization:
-                conditions.append(f"organization_name ILIKE ${param_idx}")
-                params.append(f"%{organization}%")
+                conditions.append(org_condition("organization_id", f"${param_idx}"))
+                params.append(org_pattern(organization))
                 param_idx += 1
             if org_type:
                 conditions.append(f"org_type = ${param_idx}")

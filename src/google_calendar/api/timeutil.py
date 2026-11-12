@@ -1,6 +1,6 @@
 """Time values sent to the Google Calendar API."""
 
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 
@@ -29,3 +29,23 @@ def to_rfc3339(value: str, timezone: str | None) -> str:
     (owner decision 2026-11-12, issue #3) — it used to be read as UTC.
     """
     return as_aware(value, timezone).isoformat()
+
+
+def window_bound(value: str, timezone: str | None, *, end: bool) -> str:
+    """One bound of a time window (timeMin or timeMax) as an RFC3339 timestamp.
+
+    A date ('2026-11-09') is that whole day on the clock of `timezone`: as the start
+    bound it is the day's midnight, as the end bound the next midnight — Google's
+    timeMax is exclusive, so the last moment of the day is still inside. A datetime
+    follows to_rfc3339. One rule for every window a tool takes (issue #9).
+    """
+    if "T" in value:
+        return to_rfc3339(value, timezone)
+    day = date.fromisoformat(value)  # a malformed date is refused here
+    if not timezone:
+        raise ValueError(f"No timezone to interpret the date {value}")
+    if end:
+        day += timedelta(days=1)
+    # combine() puts midnight on the local clock, so a DST change inside the window
+    # still lands on the next local midnight.
+    return datetime.combine(day, time(), ZoneInfo(timezone)).isoformat()

@@ -10,7 +10,7 @@ Uses PostgreSQL via asyncpg.
 import re
 from typing import Optional
 from google_calendar.db.connection import get_db
-from .database import contact_search
+from .database import contact_search, organization_ids_matching
 
 
 def _detect_identifier_type(identifier: str) -> str:
@@ -242,6 +242,9 @@ async def resolve_contact(
         project_id = context.get('project_id')
         organization = context.get('organization')
         role_name = context.get('role_name')
+        # The contact record carries organization_id, not a name to compare: match the
+        # hint once by the shared rule (database.ORG_MATCH), then compare ids.
+        org_ids = await organization_ids_matching(organization) if organization else set()
 
         for r in results:
             contact = await _get_contact_with_channels(r['id'])
@@ -255,7 +258,7 @@ async def resolve_contact(
                     return _to_contact_resolve(contact, 'name_with_project_context')
 
             # Check organization match
-            if organization and contact.get('organization', '').lower() == organization.lower():
+            if contact.get('organization_id') in org_ids:
                 return _to_contact_resolve(contact, 'name_with_org_context')
 
             # Check role match
