@@ -69,7 +69,12 @@ TOOLS (7):
   organization_id links to organizations table
   Relationship tracking: context, relationship_type, relationship_strength
 
-TIME FORMAT: '2024-12-15T10:00:00' (timed) or '2024-12-15' (all-day)"""
+TIME FORMAT: '2024-12-15T10:00:00' (timed) or '2024-12-15' (all-day).
+Time windows (events list/search time_min/time_max/period, availability) without an
+offset are local time in the call's `timezone`, else in the account's calendar timezone
+(calendars(action="settings")) — never UTC. create/update need `timezone` for start/end.
+PAGING: events list/search return nextPageToken and the window queried (timeMin,
+timeMax) when hasMore; pass page_token, time_min and time_max back for the next page."""
 )
 
 # Register all 7 tools. The full docstring is the description: fastmcp 4 otherwise

@@ -7,7 +7,8 @@ Handles:
 
 from typing import Optional
 
-from google_calendar.api.client import get_service
+from google_calendar.api.client import execute_with_retry, get_service
+from google_calendar.api.timeutil import to_rfc3339
 
 
 def get_freebusy(
@@ -21,11 +22,11 @@ def get_freebusy(
     Query free/busy information for calendars.
     
     Args:
-        time_min: Start of time range (ISO 8601)
-        time_max: End of time range (ISO 8601)
+        time_min: Start of time range (ISO 8601; without an offset it is local to `timezone`)
+        time_max: End of time range (ISO 8601; without an offset it is local to `timezone`)
         calendars: List of calendar IDs to check
         account: Account name
-        timezone: Timezone for interpretation (IANA format)
+        timezone: IANA zone for naive bounds and for the response
     
     Returns:
         {
@@ -40,31 +41,20 @@ def get_freebusy(
         }
     """
     service = get_service(account)
-    
+
     body = {
-        "timeMin": _ensure_rfc3339(time_min),
-        "timeMax": _ensure_rfc3339(time_max),
+        "timeMin": to_rfc3339(time_min, timezone),
+        "timeMax": to_rfc3339(time_max, timezone),
         "items": [{"id": cal_id} for cal_id in calendars],
     }
-    
+
     if timezone:
         body["timeZone"] = timezone
-    
-    result = service.freebusy().query(body=body).execute()
-    
+
+    result = execute_with_retry(service.freebusy().query(body=body), account)
+
     return {
         "timeMin": result.get("timeMin"),
         "timeMax": result.get("timeMax"),
         "calendars": result.get("calendars", {}),
     }
-
-
-def _ensure_rfc3339(dt_string: str) -> str:
-    """Ensure datetime string is RFC3339 format."""
-    if "T" not in dt_string:
-        raise ValueError(f"Expected datetime, got date: {dt_string}")
-    
-    if dt_string.endswith("Z") or "+" in dt_string[-6:] or dt_string[-6:-5] == "-":
-        return dt_string
-    
-    return dt_string + "Z"

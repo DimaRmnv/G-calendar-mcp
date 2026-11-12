@@ -6,7 +6,8 @@ Replaces: list_events, create_event, get_event, update_event, delete_event, sear
 """
 
 from typing import Optional, Literal
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
+from zoneinfo import ZoneInfo
 import uuid
 
 from google_calendar.api.events import (
@@ -20,7 +21,14 @@ from google_calendar.api.events import (
     is_recurring_instance,
     move_event as api_move_event,
 )
-from google_calendar.api.client import get_user_timezone, handle_auth_errors
+from google_calendar.api.client import (
+    AuthRequiredError,
+    RateLimitError,
+    TokenExpiredError,
+    get_user_timezone,
+    handle_auth_errors,
+)
+from google_calendar.api.timeutil import as_aware, has_offset, to_rfc3339
 
 
 @handle_auth_errors
@@ -38,6 +46,7 @@ def events(
     period: Optional[str] = None,
     query: Optional[str] = None,
     max_results: int = 50,
+    page_token: Optional[str] = None,
     private_extended_property: Optional[list[str]] = None,
     shared_extended_property: Optional[list[str]] = None,
     # Create/Update parameters
@@ -75,12 +84,23 @@ def events(
 
     Actions:
         list: Events in time range. Use period='today'|'tomorrow'|'week'|'month' OR time_min/time_max
+              (only one bound given → 7-day window from/to it)
         create: New event. Requires summary, start, end. Format summary per calendar-manager skill.
         get: Full event details. Requires event_id
-        update: Modify event. Requires event_id. Use scope='single'|'all' for recurring
+        update: Modify event. Requires event_id. Use scope='single'|'all' for recurring.
+                recurrence changes the series rule and needs scope='all' on a recurring event
         delete: Remove event. Requires event_id
         search: Full-text search. Requires query
-        batch: Multiple operations. Requires operations[]
+        batch: Multiple operations. Requires operations[]. Stops at an authorization or
+               persistent rate-limit error; the rest are reported as not_attempted
+
+    TIME (list, search): time_min/time_max without an offset ('2025-01-15T10:00:00') and
+    period windows are local time in `timezone`, or in the account's calendar timezone
+    when `timezone` is not given. create/update need `timezone` for start/end.
+
+    PAGING (list, search): hasMore=true comes with nextPageToken and the window queried
+    (timeMin, timeMax). For the next page pass page_token=nextPageToken,
+    time_min=timeMin, time_max=timeMax and the same other filters.
 
     ACCOUNT SELECTION:
     When user mentions "личный/personal" or "рабочий/work":
@@ -111,8 +131,10 @@ def events(
             period=period,
             query=query,
             max_results=max_results,
+            page_token=page_token,
             private_extended_property=private_extended_property,
             shared_extended_property=shared_extended_property,
+            timezone=timezone,
             account=account,
         )
 
@@ -168,6 +190,7 @@ def events(
             remove_attendees=remove_attendees,
             add_meet_link=add_meet_link,
             reminders_minutes=reminders_minutes,
+            recurrence=recurrence,
             color_id=color_id,
             visibility=visibility,
             transparency=transparency,
@@ -197,6 +220,8 @@ def events(
             time_min=time_min,
             time_max=time_max,
             max_results=max_results,
+            page_token=page_token,
+            timezone=timezone,
             account=account,
         )
 
@@ -218,16 +243,27 @@ def events(
 
 # Helper functions
 
+_DEFAULT_WINDOW = timedelta(days=7)
+
+
 def _get_time_range(
     time_min: Optional[str],
     time_max: Optional[str],
     period: Optional[str],
+    tz: Optional[str],
 ) -> tuple[str, str]:
-    """Build time range from explicit times or period shorthand."""
+    """Build time range from explicit times or period shorthand, on the clock of `tz`.
+
+    `tz` may be None only when both bounds carry an offset.
+    """
     if time_min and time_max:
         return time_min, time_max
+    if time_min:
+        return time_min, (as_aware(time_min, tz) + _DEFAULT_WINDOW).isoformat()
+    if time_max:
+        return (as_aware(time_max, tz) - _DEFAULT_WINDOW).isoformat(), time_max
 
-    now = datetime.now()
+    now = datetime.now(ZoneInfo(tz))
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
     if period == "today":
@@ -260,13 +296,15 @@ def _list_events(
     period: Optional[str],
     query: Optional[str],
     max_results: int,
+    page_token: Optional[str],
     private_extended_property: Optional[list[str]],
     shared_extended_property: Optional[list[str]],
+    timezone: Optional[str],
     account: Optional[str],
 ) -> dict:
     """List events from a calendar."""
-    tz = get_user_timezone(account)
-    t_min, t_max = _get_time_range(time_min, time_max, period)
+    tz = timezone or _account_zone_if_needed(time_min, time_max, account)
+    t_min, t_max = _get_time_range(time_min, time_max, period, tz)
 
     result = api_list_events(
         account=account,
@@ -275,8 +313,10 @@ def _list_events(
         time_max=t_max,
         max_results=min(max_results, 250),
         query=query,
+        page_token=page_token,
         private_extended_property=private_extended_property,
         shared_extended_property=shared_extended_property,
+        timezone=tz,
     )
 
     events_list = [format_event_summary(e) for e in result.get("items", [])]
@@ -285,8 +325,21 @@ def _list_events(
         "events": events_list,
         "calendarName": result.get("summary"),
         "timeZone": result.get("timeZone"),
+        "timeMin": to_rfc3339(t_min, tz),
+        "timeMax": to_rfc3339(t_max, tz),
         "hasMore": result.get("nextPageToken") is not None,
+        "nextPageToken": result.get("nextPageToken"),
     }
+
+
+def _account_zone_if_needed(
+    time_min: Optional[str], time_max: Optional[str], account: Optional[str]
+) -> Optional[str]:
+    """The account zone, looked up only when a bound is missing or has no offset."""
+    bounds = [b for b in (time_min, time_max) if b]
+    if len(bounds) == 2 and all(has_offset(b) for b in bounds):
+        return None
+    return get_user_timezone(account)
 
 
 def _create_event(
@@ -444,6 +497,7 @@ def _update_event(
     remove_attendees: Optional[list[str]],
     add_meet_link: bool,
     reminders_minutes: Optional[list[int]],
+    recurrence: Optional[list[str]],
     color_id: Optional[str],
     visibility: Optional[str],
     transparency: Optional[str],
@@ -455,6 +509,10 @@ def _update_event(
     """Update an existing calendar event."""
     current_event = api_get_event(event_id, account=account, calendar_id=calendar_id)
     is_recurring = "recurrence" in current_event or current_event.get("recurringEventId")
+
+    # Owner decision 2026-11-12 (issue #3): refuse rather than widen the scope silently.
+    if recurrence is not None and is_recurring and scope != "all":
+        raise ValueError("recurrence belongs to the series; pass scope='all'")
 
     target_event_id = event_id
     scope_applied = "single"
@@ -472,7 +530,7 @@ def _update_event(
                     event_id,
                     account=account,
                     calendar_id=calendar_id,
-                    time_min=datetime.now().isoformat(),
+                    time_min=datetime.now(dt_timezone.utc).isoformat(),
                     max_results=1
                 )
                 if instances:
@@ -499,8 +557,9 @@ def _update_event(
         summary is not None, start is not None, end is not None,
         description is not None, location is not None, timezone is not None,
         attendees is not None, add_attendees, remove_attendees,
-        add_meet_link, reminders_minutes is not None, color_id is not None,
-        visibility is not None, transparency is not None, extended_properties is not None,
+        add_meet_link, reminders_minutes is not None, recurrence is not None,
+        color_id is not None, visibility is not None, transparency is not None,
+        extended_properties is not None,
     ])
 
     if not has_updates and moved_to:
@@ -567,6 +626,7 @@ def _update_event(
         timezone=timezone,
         attendees=attendees_list,
         reminders=reminders,
+        recurrence=recurrence,
         conference_data=conference_data,
         extended_properties=extended_properties,
         color_id=color_id,
@@ -631,7 +691,7 @@ def _delete_event(
                     event_id,
                     account=account,
                     calendar_id=calendar_id,
-                    time_min=datetime.now().isoformat(),
+                    time_min=datetime.now(dt_timezone.utc).isoformat(),
                     max_results=1
                 )
                 if instances:
@@ -664,16 +724,17 @@ def _search_events(
     time_min: Optional[str],
     time_max: Optional[str],
     max_results: int,
+    page_token: Optional[str],
+    timezone: Optional[str],
     account: Optional[str],
 ) -> dict:
     """Search calendar events by text query."""
-    now = datetime.now()
+    tz = timezone or _account_zone_if_needed(time_min, time_max, account)
 
-    if not time_min:
-        time_min = (now - timedelta(days=365)).isoformat()
-
-    if not time_max:
-        time_max = (now + timedelta(days=365)).isoformat()
+    if not time_min or not time_max:
+        now = datetime.now(ZoneInfo(tz))
+        time_min = time_min or (now - timedelta(days=365)).isoformat()
+        time_max = time_max or (now + timedelta(days=365)).isoformat()
 
     result = api_list_events(
         account=account,
@@ -682,6 +743,8 @@ def _search_events(
         time_max=time_max,
         max_results=min(max_results, 250),
         query=query,
+        page_token=page_token,
+        timezone=tz,
     )
 
     events_list = [format_event_summary(e) for e in result.get("items", [])]
@@ -690,7 +753,10 @@ def _search_events(
         "events": events_list,
         "query": query,
         "total": len(events_list),
+        "timeMin": to_rfc3339(time_min, tz),
+        "timeMax": to_rfc3339(time_max, tz),
         "hasMore": result.get("nextPageToken") is not None,
+        "nextPageToken": result.get("nextPageToken"),
     }
 
 
@@ -784,6 +850,19 @@ def _batch_operations(
             else:
                 raise ValueError(f"Unknown action: {op_action}. Use 'create', 'update', or 'delete'.")
 
+        # Account-wide failures stop the batch: every remaining operation would fail the
+        # same way, and the caller needs the re-authorization answer, not N copies of it.
+        except (AuthRequiredError, TokenExpiredError, RateLimitError) as e:
+            results.append({
+                "index": i,
+                "action": op_action or "unknown",
+                "status": "error",
+                "error": str(e),
+            })
+            failed += 1
+            stopped_by = e
+            break
+
         except Exception as e:
             results.append({
                 "index": i,
@@ -792,10 +871,22 @@ def _batch_operations(
                 "error": str(e),
             })
             failed += 1
+    else:
+        stopped_by = None
 
-    return {
+    results.extend(
+        {"index": j, "action": op.get("action") or "unknown", "status": "not_attempted"}
+        for j, op in enumerate(operations[len(results):], start=len(results))
+    )
+
+    response = {
         "total": len(operations),
         "succeeded": succeeded,
         "failed": failed,
         "results": results,
     }
+    if isinstance(stopped_by, (AuthRequiredError, TokenExpiredError)):
+        response.update(stopped_by.to_dict())
+    elif stopped_by is not None:
+        response["stopped"] = str(stopped_by)
+    return response

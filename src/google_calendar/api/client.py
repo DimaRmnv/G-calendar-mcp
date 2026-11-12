@@ -9,6 +9,7 @@ Handles:
 - Auto-reauth with auth_url on token errors
 """
 
+import http.client
 import json
 import os
 import logging
@@ -18,8 +19,9 @@ from functools import wraps
 from typing import Optional, Callable
 from pathlib import Path
 
+import httplib2
 from google.auth.transport.requests import Request
-from google.auth.exceptions import RefreshError
+from google.auth.exceptions import RefreshError, TransportError
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build, Resource
@@ -223,113 +225,122 @@ def handle_auth_errors(func: Callable) -> Callable:
 # API Request Helper with Retry and Auth Error Handling
 # ============================================================================
 
-def execute_with_retry(request, account: str, max_retries: int = 3):
+# 403 reasons meaning "slow down": Google refused before running the request, so
+# repeating it is safe for every method.
+_RATE_LIMIT_REASONS = {"rateLimitExceeded", "userRateLimitExceeded"}
+# 403 reasons a new authorization fixes (token lacks a scope).
+_AUTH_REASONS = {"insufficientPermissions", "ACCESS_TOKEN_SCOPE_INSUFFICIENT"}
+# Transport failures: the request may or may not have reached Google.
+_TRANSPORT_ERRORS = (OSError, httplib2.HttpLib2Error, http.client.HTTPException)
+
+
+def _error_reasons(error: HttpError) -> set[str]:
+    """Reason codes of a Google error body: `error.errors[].reason` and `error.details[].reason`.
+
+    Tolerates any body shape: a malformed one yields no reasons, so the HttpError itself
+    still reaches the caller.
     """
-    Execute Google API request with retry and error handling.
+    try:
+        body = json.loads(error.content.decode("utf-8"))
+    except (ValueError, AttributeError):
+        return set()
+    err = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(err, dict):
+        return set()
+    items = [
+        item
+        for key in ("errors", "details")
+        if isinstance(err.get(key), list)
+        for item in err[key]
+    ]
+    return {
+        item["reason"] for item in items
+        if isinstance(item, dict) and isinstance(item.get("reason"), str)
+    }
 
-    Handles:
-    - 401/403 with invalid_grant → AuthRequiredError with auth_url
-    - 429 rate limit → retry with exponential backoff
-    - 5xx server errors → retry
-    - Network errors → retry
 
-    Args:
-        request: Google API request object (before .execute())
-        account: Account name for error context
-        max_retries: Maximum retry attempts (default: 3)
+def execute_with_retry(request, account: Optional[str], *, idempotent: bool = True, max_attempts: int = 3):
+    """
+    Execute a Google API request — the single executor for every Calendar call.
 
-    Returns:
-        API response dict
+    - 401, or 403 for a missing scope → AuthRequiredError carrying auth_url.
+    - 429 or 403 rate limit → retried with backoff for any method (Google refused it).
+    - 5xx and transport errors → retried only when `idempotent`: a create or move whose
+      response was lost may already have happened, and repeating it duplicates the event.
+    - A transport error while refreshing the token → retried for any method.
+    - Any other HttpError (403 not the organizer, 404, 400) → raised unchanged.
 
     Raises:
-        AuthRequiredError: Token invalid/revoked, contains auth_url
-        RateLimitError: Rate limit exceeded after retries
-        HttpError: Other API errors
+        AuthRequiredError, RateLimitError, HttpError, or the transport error.
     """
-    for attempt in range(max_retries):
+    account = account or get_default_account() or "default"
+
+    for attempt in range(1, max_attempts + 1):
+        last = attempt == max_attempts
         try:
             return request.execute()
 
         except HttpError as e:
             status = e.resp.status
-            error_content = e.content.decode("utf-8", errors="ignore") if e.content else ""
-
+            reasons = _error_reasons(e)
             logger.warning(
-                f"Calendar API error {status} for account '{account}' "
-                f"(attempt {attempt + 1}/{max_retries}): {error_content[:200]}"
+                "Calendar API error %s %s for account '%s' (attempt %d/%d)",
+                status, sorted(reasons), account, attempt, max_attempts,
             )
 
-            # Auth errors - no retry, need reauth
-            if status in (401, 403):
+            if status == 401 or (status == 403 and reasons & _AUTH_REASONS):
                 clear_service_cache(account)
-                auth_url = settings.get_auth_start_url(account)
-
-                # Check for specific auth error messages
-                if any(msg in error_content.lower() for msg in [
-                    "invalid_grant",
-                    "token has been",
-                    "token expired",
-                    "invalid credentials",
-                    "request had invalid authentication"
-                ]):
-                    logger.error(f"Token expired/revoked for account '{account}'")
-                    raise AuthRequiredError(
-                        account=account,
-                        auth_url=auth_url,
-                        reason="Token expired or revoked"
-                    )
-
-                # Permission denied
-                logger.error(f"Permission denied for account '{account}': {error_content[:100]}")
                 raise AuthRequiredError(
                     account=account,
-                    auth_url=auth_url,
-                    reason=f"Permission denied: {error_content[:100]}"
-                )
+                    auth_url=settings.get_auth_start_url(account),
+                    reason=f"Google refused the credentials ({status} {', '.join(sorted(reasons)) or 'no reason'})",
+                ) from e
 
-            # Rate limit - retry with backoff
-            if status == 429:
-                if attempt < max_retries - 1:
-                    wait = 2 ** (attempt + 1)
-                    logger.info(f"Rate limited, waiting {wait}s before retry...")
-                    time.sleep(wait)
-                    continue
-                logger.error(f"Rate limit exceeded after {max_retries} retries")
-                raise RateLimitError("Rate limit exceeded after retries")
+            if status == 429 or (status == 403 and reasons & _RATE_LIMIT_REASONS):
+                if last:
+                    raise RateLimitError(
+                        f"Google rate limit for account '{account}' persisted after {max_attempts} attempts"
+                    ) from e
+                time.sleep(2 ** attempt)
+                continue
 
-            # Server errors - retry
-            if status >= 500:
-                if attempt < max_retries - 1:
-                    wait = 2 ** attempt
-                    logger.info(f"Server error {status}, retrying in {wait}s...")
-                    time.sleep(wait)
-                    continue
+            if status >= 500 and idempotent and not last:
+                time.sleep(2 ** (attempt - 1))
+                continue
 
-            # Other errors - don't retry
             raise
 
         except RefreshError as e:
-            # Token refresh failed during API call - need reauth
             clear_service_cache(account)
-            auth_url = settings.get_auth_start_url(account)
-            error_msg = str(e)
-            logger.error(f"RefreshError for '{account}': {error_msg}")
+            logger.error("Token refresh failed for account '%s': %s", account, e)
             raise AuthRequiredError(
                 account=account,
-                auth_url=auth_url,
-                reason=f"Token refresh failed: {error_msg[:200]}"
-            )
+                auth_url=settings.get_auth_start_url(account),
+                reason=f"Token refresh failed: {str(e)[:200]}",
+            ) from e
 
-        except Exception as e:
-            # Network errors and other exceptions - retry
-            if attempt < max_retries - 1:
-                wait = 2 ** attempt
-                logger.warning(f"Request failed: {e}, retrying in {wait}s...")
-                time.sleep(wait)
+        except TransportError as e:
+            # google-auth raises this only while refreshing the token — before the API
+            # request is sent, or after Google refused it with 401 — so nothing ran yet.
+            logger.warning(
+                "Token refresh transport error for account '%s' (attempt %d/%d): %r",
+                account, attempt, max_attempts, e,
+            )
+            if not last:
+                time.sleep(2 ** (attempt - 1))
                 continue
             raise
 
-    # Should not reach here, but just in case
+        except _TRANSPORT_ERRORS as e:
+            logger.warning(
+                "Calendar API transport error for account '%s' (attempt %d/%d, idempotent=%s): %r",
+                account, attempt, max_attempts, idempotent, e,
+            )
+            if idempotent and not last:
+                time.sleep(2 ** (attempt - 1))
+                continue
+            raise
+
     raise CalendarAPIError("Request failed after all retries")
 
 
@@ -525,49 +536,43 @@ def verify_credentials(account: str) -> dict:
     Verify credentials by fetching calendar settings.
     
     Returns profile info on success.
-    Raises ValueError on failure.
+    Raises ValueError when Google rejects the calls; an authorization problem
+    propagates as AuthRequiredError so the caller can answer with auth_url.
     """
     service = get_service(account)
-    
+
     try:
-        # Get user's timezone setting
-        settings = service.settings().get(setting="timezone").execute()
-        timezone = settings.get("value")
-        
-        # Get primary calendar info
-        calendar = service.calendars().get(calendarId="primary").execute()
-        
-        return {
-            "email": calendar.get("id"),  # Primary calendar ID is the email
-            "timezone": timezone,
-            "calendar_name": calendar.get("summary"),
-        }
-    except Exception as e:
-        raise ValueError(f"Failed to verify credentials: {e}")
+        setting = execute_with_retry(service.settings().get(setting="timezone"), account)
+        calendar = execute_with_retry(service.calendars().get(calendarId="primary"), account)
+    except HttpError as e:
+        raise ValueError(f"Failed to verify credentials: {e}") from e
+
+    return {
+        "email": calendar.get("id"),  # Primary calendar ID is the email
+        "timezone": setting.get("value"),
+        "calendar_name": calendar.get("summary"),
+    }
 
 
 def get_authorized_email(account: str) -> Optional[str]:
     """
     Get email address for authorized account.
-    
-    Returns None if account not authorized.
+
+    Returns None if Google rejects the lookup; authorization errors propagate.
     """
     try:
-        profile = verify_credentials(account)
-        return profile.get("email")
-    except (ValueError, Exception):
+        return verify_credentials(account).get("email")
+    except ValueError:
         return None
 
 
-def get_user_timezone(account: Optional[str] = None) -> Optional[str]:
+def get_user_timezone(account: Optional[str] = None) -> str:
     """
-    Get user's timezone from Calendar settings.
-    
-    Returns IANA timezone string (e.g., 'Asia/Bangkok') or None.
+    Get user's timezone from Calendar settings (IANA, e.g. 'Asia/Bangkok').
+
+    Errors propagate: naive times are interpreted in this zone, so a silent fallback
+    to UTC would shift every requested window.
     """
-    try:
-        service = get_service(account)
-        settings = service.settings().get(setting="timezone").execute()
-        return settings.get("value")
-    except Exception:
-        return None
+    service = get_service(account)
+    setting = execute_with_retry(service.settings().get(setting="timezone"), account)
+    return setting["value"]
