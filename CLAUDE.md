@@ -232,7 +232,7 @@ docker exec google-calendar-mcp python -m google_calendar auth --list
 
 **Смена клиента (после 12.11 — единственный способ поменять флаг):** создать новый клиент
 (Web app, тот же redirect URI, сразу agentic) → положить его JSON в `oauth_client.json` →
-переавторизовать каждый аккаунт через `https://viredge.com/calendar/mcp/oauth/start/{account}`
+переавторизовать каждый аккаунт по подписанной ссылке (см. «Переавторизация аккаунта» ниже)
 → `auth --list` без ⚠ → удалить старый клиент.
 
 **Риск:** для Workspace-аккаунтов (не `@gmail.com`) админ домена может ограничить доступ
@@ -249,6 +249,21 @@ agentic-клиентов (agent access controls) — аккаунт начнёт
 ### OAuth не работает
 1. Проверь `GCAL_MCP_OAUTH_REDIRECT_URI` совпадает с Google Cloud Console
 2. Redirect URI: `https://viredge.com/calendar/mcp/oauth/callback`
+
+### Переавторизация аккаунта
+`/oauth/start/{account}` открывается только по ссылке, подписанной сервером.
+- Подпись (`?token=…`) выводится из `GCAL_MCP_API_KEY`, ссылка живёт 1 час, ротация ключа её аннулирует.
+- Ссылку без токена или чужую сервер отклоняет с 403.
+
+Где взять ссылку:
+- в ответе тула при ошибке авторизации (`auth_url`);
+- в контейнере:
+  ```bash
+  docker exec google-calendar-mcp python -c "from google_calendar.settings import settings; print(settings.get_auth_start_url('work'))"
+  ```
+- через `GET /oauth/status/{account}` с API-ключом (поле `auth_url`). `/oauth/status` и `/oauth/accounts` требуют аутентификации.
+
+Callback сохраняет токен, только если в Google вошли тем аккаунтом, чей email записан для этого имени в `config.json`. Иначе ответ 403 и токен не меняется.
 
 ### Коннектор Claude не регистрируется («Couldn't register with sign-in service»)
 1. Проверь, что `GCAL_MCP_SERVER_BASE_URL` задан в `.env` (без него metadata → 500)

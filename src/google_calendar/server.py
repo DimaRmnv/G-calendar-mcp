@@ -202,7 +202,12 @@ def create_http_app():
         if (
             path in ("/health", "/mcp/calendar/health", "/docs", "/redoc",
                      "/openapi.json", "/docs/oauth2-redirect")
-            or path.startswith("/mcp/calendar/oauth/")        # Google + MCP OAuth endpoints
+            # Only the OAuth steps a browser or the connector hits before it holds a
+            # credential: Google start (signed link) and callback; MCP register/authorize/token.
+            # /oauth/status and /oauth/accounts expose account e-mails and stay authenticated.
+            or path in ("/mcp/calendar/oauth/callback", "/mcp/calendar/oauth/register",
+                        "/mcp/calendar/oauth/authorize", "/mcp/calendar/oauth/token")
+            or path.startswith("/mcp/calendar/oauth/start/")
             or path.startswith("/mcp/calendar/export/")       # UUID is the token
             or path.startswith("/mcp/calendar/.well-known/")  # OAuth discovery metadata
         ):
