@@ -90,8 +90,10 @@ def events(
         update: Modify event. Requires event_id. Use scope='single'|'all' for recurring.
                 recurrence changes the series rule and needs scope='all' on a recurring event
         delete: Remove event. Requires event_id
-        search: Full-text search. Requires query. Window: time_min/time_max; one bound
-                given → a year from/to it; none → a year either side of now
+        search: Full-text search. Requires query. Window: time_min/time_max. Only
+                time_min → up to a year past the later of time_min and now; only
+                time_max → from a year before the earlier of time_max and now;
+                none → a year either side of now
         batch: Multiple operations. Requires operations[]. Stops at an authorization or
                persistent rate-limit error; the rest are reported as not_attempted
 
@@ -733,16 +735,18 @@ def _search_events(
     """Search calendar events by text query."""
     tz = timezone or _account_zone_if_needed(time_min, time_max, account)
 
-    # A missing bound is a year from the given one (from "now" when none is given);
-    # anchoring it on "now" inverted the window for a bound far from today.
-    if time_min and not time_max:
-        time_max = (as_aware(time_min, tz) + _SEARCH_SPAN).isoformat()
-    elif time_max and not time_min:
-        time_min = (as_aware(time_max, tz) - _SEARCH_SPAN).isoformat()
-    elif not time_min and not time_max:
+    # A missing bound reaches a year past the later of (given bound, now) — or before
+    # the earlier of them: "since X" keeps covering the next year, a bound far from
+    # today never inverts the window.
+    if not time_min or not time_max:
         now = datetime.now(ZoneInfo(tz))
-        time_min = (now - _SEARCH_SPAN).isoformat()
-        time_max = (now + _SEARCH_SPAN).isoformat()
+        if time_min:
+            time_max = (max(as_aware(time_min, tz), now) + _SEARCH_SPAN).isoformat()
+        elif time_max:
+            time_min = (min(as_aware(time_max, tz), now) - _SEARCH_SPAN).isoformat()
+        else:
+            time_min = (now - _SEARCH_SPAN).isoformat()
+            time_max = (now + _SEARCH_SPAN).isoformat()
 
     result = api_list_events(
         account=account,

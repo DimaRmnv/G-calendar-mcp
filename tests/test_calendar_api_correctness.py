@@ -26,6 +26,7 @@ import google_calendar.api.client as client
 import google_calendar.api.events as api_events
 import google_calendar.api.freebusy as api_freebusy
 import google_calendar.tools.calendars as tools_calendars
+import google_calendar.tools.events as tools_events
 import google_calendar.tools.projects.report as report
 from google_calendar.settings import settings
 from google_calendar.tools.attendees import attendees
@@ -210,18 +211,49 @@ def test_search_honours_an_explicit_timezone(fake):
     assert fake.params("events", "list")[-1]["timeMin"] == "2026-11-12T12:00:00+07:00"
 
 
+FROZEN_NOW = datetime(2026, 11, 12, 15, 30, tzinfo=ZoneInfo("UTC"))  # 17:30 at +02:00
+
+
+class _FrozenDatetime(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return FROZEN_NOW.astimezone(tz) if tz else FROZEN_NOW.replace(tzinfo=None)
+
+
+@pytest.fixture
+def frozen_now(monkeypatch):
+    monkeypatch.setattr(tools_events, "datetime", _FrozenDatetime)
+
+
 @pytest.mark.parametrize("bound, expected", [
+    # "since X" in the past: up to a year past today — never less than without a bound.
+    ({"time_min": "2025-03-01T00:00:00"}, ("2025-03-01T00:00:00+02:00", "2027-11-12T17:30:00+02:00")),
+    # "since X" beyond the default window: a year past X, never inverted.
     ({"time_min": "2028-06-01T00:00:00"}, ("2028-06-01T00:00:00+02:00", "2029-06-01T00:00:00+02:00")),
+    # "until X" in the future: from a year before today.
+    ({"time_max": "2030-01-01T00:00:00"}, ("2025-11-12T17:30:00+02:00", "2030-01-01T00:00:00+02:00")),
+    # "until X" before the default window: a year before X, never inverted.
     ({"time_max": "2020-06-01T00:00:00"}, ("2019-06-02T00:00:00+02:00", "2020-06-01T00:00:00+02:00")),
+    # no bound: a year either side of now.
+    ({}, ("2025-11-12T17:30:00+02:00", "2027-11-12T17:30:00+02:00")),
 ])
-def test_search_with_one_bound_spans_a_year_from_it(fake, bound, expected):
-    # Anchored on "now", a bound far from today produced timeMax < timeMin.
+def test_search_window_covers_today_plus_a_year_and_never_inverts(fake, frozen_now, bound, expected):
     fake.respond("events", "list", {"items": []})
 
     events(action="search", account="work", query="x", **bound)
 
     sent = fake.params("events", "list")[-1]
     assert (sent["timeMin"], sent["timeMax"]) == expected
+
+
+def test_list_without_bounds_covers_the_next_seven_days(fake, frozen_now):
+    fake.respond("events", "list", {"items": []})
+
+    events(action="list", account="work")
+
+    sent = fake.params("events", "list")[-1]
+    assert (sent["timeMin"], sent["timeMax"]) == ("2026-11-12T17:30:00+02:00",
+                                                  "2026-11-19T17:30:00+02:00")
 
 
 def test_freebusy_query_reads_a_naive_window_in_the_account_timezone(fake):
@@ -309,6 +341,18 @@ def test_an_auth_failure_drops_the_cached_service(fake, monkeypatch, failure):
 
     assert (result["error"], result["auth_url"]) == ("auth_required", AUTH_URL)
     assert "work" not in client._services
+
+
+@pytest.mark.parametrize("reason", ["quotaExceeded", "dailyLimitExceeded"])
+def test_an_exhausted_quota_is_not_retried(fake, reason):
+    # Unlike a rate limit, an exhausted quota does not clear within seconds: retrying
+    # only multiplies the calls.
+    fake.respond("events", "get", http_error(403, reason), event("e1"))
+
+    with pytest.raises(HttpError):
+        events(action="get", account="work", event_id="e1")
+
+    assert fake.executed("events", "get") == 1
 
 
 def test_user_rate_limit_403_is_retried(fake):
@@ -554,6 +598,8 @@ def test_batch_stops_when_the_rate_limit_persists(fake):
     result = events(action="batch", account="work", operations=_three_creates())
 
     assert [r["status"] for r in result["results"]] == ["error", "not_attempted", "not_attempted"]
+    assert [r["index"] for r in result["results"]] == [0, 1, 2]
+    assert "rate limit" in result["stopped"].lower()
     assert fake.executed("events", "insert") == 3
 
 
