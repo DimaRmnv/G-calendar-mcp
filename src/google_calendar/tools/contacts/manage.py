@@ -53,6 +53,22 @@ async def _get_status() -> dict:
     }
 
 
+# Filters contact_list reads. An unknown key is refused: a dropped filter would return
+# the unfiltered list as if it had been filtered (issue #7).
+_CONTACT_LIST_FILTERS = ("organization", "country", "project_id", "role_name",
+                         "preferred_channel", "org_type", "active_only")
+
+
+def _check_contact_list_filters(p: dict) -> None:
+    # `account` is not a filter, but callers pass it to every operation.
+    unknown = sorted(set(p) - {"op", "account", *_CONTACT_LIST_FILTERS})
+    if unknown:
+        raise ValueError(
+            f"contact_list: unknown filter(s) {', '.join(unknown)}; "
+            f"supported: {', '.join(_CONTACT_LIST_FILTERS)}"
+        )
+
+
 async def _execute_operation(op: str, p: dict) -> dict:
     """Execute a single operation. All database functions are async."""
 
@@ -78,6 +94,7 @@ async def _execute_operation(op: str, p: dict) -> dict:
             include_projects=p.get("include_projects", False)
         )
     elif op == "contact_list":
+        _check_contact_list_filters(p)
         contacts = await contact_list(
             organization=p.get("organization"),
             country=p.get("country"), project_id=p.get("project_id"),
@@ -257,8 +274,10 @@ async def contacts(operations: list[dict]) -> dict:
         LIST/SEARCH return COMPACT format (id, name, org, job_title, country, channel).
         Use contact_get(id) for FULL details. Add include_channels/include_projects for related data.
 
-        contact_list    : List all (compact). Filters: organization_id, country, org_type,
-                          preferred_channel. Returns: CONTACT_COMPACT[]
+        contact_list    : List all (compact). Filters: organization (name, partial match),
+                          country, org_type, preferred_channel, active_only; project_id
+                          (+ role_name) → that project's team. Unknown filters are refused.
+                          Returns: CONTACT_COMPACT[]
         contact_search  : Search by name/org/job (compact + email + score). Returns: CONTACT_COMPACT[]
         contact_get     : Full details. Params: id, include_channels (bool), include_projects (bool).
                           Returns: CONTACT_FULL, optionally with channels[] and projects[]
