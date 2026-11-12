@@ -114,6 +114,10 @@ def event(event_id, start="2026-11-12T12:00:00+02:00", end="2026-11-12T14:00:00+
 def fake(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))  # empty local config: no default account
     monkeypatch.setattr(settings, "server_base_url", BASE_URL, raising=False)
+    # No server secret (nor one from .env): auth_url is the bare start link
+    # (signed links: test_google_oauth_routes.py).
+    for name in ("api_key", "oauth_client_id", "oauth_client_secret"):
+        monkeypatch.setattr(settings, name, None, raising=False)
     svc = FakeService()
     svc.respond("settings", "get", {"value": LOCAL_ZONE})
     for module in (api_events, api_freebusy, api_calendars, client, tools_calendars, report):

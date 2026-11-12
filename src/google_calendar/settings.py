@@ -8,6 +8,7 @@ Supports both local (stdio) and cloud (http) modes.
 import os
 from pathlib import Path
 from typing import Literal, Optional
+from urllib.parse import quote
 
 try:
     from pydantic import Field
@@ -133,10 +134,14 @@ class Settings(BaseSettings if PYDANTIC_AVAILABLE else object):
         return cache_dir
 
     def get_auth_start_url(self, account: str) -> Optional[str]:
-        """Get URL to start OAuth flow for account."""
-        if self.server_base_url:
-            return f"{self.server_base_url}/oauth/start/{account}"
-        return None
+        """Signed link that starts the Google OAuth flow for account (see oauth_links)."""
+        if not self.server_base_url:
+            return None
+        from google_calendar.oauth_links import mint  # oauth_links imports settings
+
+        url = f"{self.server_base_url}/oauth/start/{quote(account, safe='')}"
+        token = mint(account)
+        return f"{url}?token={token}" if token else url
 
     def get_db_url(self) -> Optional[str]:
         """Get PostgreSQL connection URL."""

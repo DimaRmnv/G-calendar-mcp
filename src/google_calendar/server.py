@@ -110,6 +110,7 @@ def create_http_app():
 
     from google_calendar.api.client import AuthRequiredError, RateLimitError, TokenExpiredError
     from google_calendar.export_router import cleanup_expired_reports, export_router
+    from google_calendar.oauth_links import server_has_authentication
     from google_calendar.oauth_server import oauth_router
     from google_calendar.settings import settings
 
@@ -202,7 +203,12 @@ def create_http_app():
         if (
             path in ("/health", "/mcp/calendar/health", "/docs", "/redoc",
                      "/openapi.json", "/docs/oauth2-redirect")
-            or path.startswith("/mcp/calendar/oauth/")        # Google + MCP OAuth endpoints
+            # Only the OAuth steps a browser or the connector hits before it holds a
+            # credential: Google start (signed link) and callback; MCP register/authorize/token.
+            # /oauth/status and /oauth/accounts expose account e-mails and stay authenticated.
+            or path in ("/mcp/calendar/oauth/callback", "/mcp/calendar/oauth/register",
+                        "/mcp/calendar/oauth/authorize", "/mcp/calendar/oauth/token")
+            or path.startswith("/mcp/calendar/oauth/start/")
             or path.startswith("/mcp/calendar/export/")       # UUID is the token
             or path.startswith("/mcp/calendar/.well-known/")  # OAuth discovery metadata
         ):
@@ -212,8 +218,8 @@ def create_http_app():
         has_api_key = bool(settings.api_key)
         has_oauth = bool(settings.oauth_client_id and settings.oauth_client_secret)
 
-        if not has_api_key and not has_oauth:
-            # No auth configured, allow all
+        if not server_has_authentication():
+            # No auth configured, allow all (the OAuth start link follows the same rule)
             return await call_next(request)
 
         auth_header = request.headers.get("Authorization", "")
