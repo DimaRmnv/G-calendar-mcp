@@ -14,6 +14,8 @@ Tools (7 total):
 - contacts: Contact management (channels, assignments)
 """
 
+import inspect
+
 from fastmcp import FastMCP
 
 from google_calendar.tools.attendees import attendees
@@ -70,14 +72,11 @@ TOOLS (7):
 TIME FORMAT: '2024-12-15T10:00:00' (timed) or '2024-12-15' (all-day)"""
 )
 
-# Register all 7 tools (fastmcp 1.0 requires calling the decorator)
-mcp.tool()(calendars)
-mcp.tool()(availability)
-mcp.tool()(events)
-mcp.tool()(attendees)
-mcp.tool()(weekly_brief)
-mcp.tool()(projects)
-mcp.tool()(contacts)
+# Register all 7 tools. The full docstring is the description: fastmcp 4 otherwise
+# keeps only the text before the first section header ("Actions:", ...), and the
+# docstring is the model's only guide to actions, account rules and examples.
+for _tool in (calendars, availability, events, attendees, weekly_brief, projects, contacts):
+    mcp.tool(description=inspect.getdoc(_tool))(_tool)
 
 
 def create_http_app():
