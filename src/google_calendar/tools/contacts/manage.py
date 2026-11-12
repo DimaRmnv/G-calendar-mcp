@@ -102,12 +102,20 @@ _OP_KEYS: dict[str, frozenset[str]] = {
     "suggest_new_contacts": frozenset({"period", "sources", "limit"}),
     "contact_brief": frozenset({"contact_id", "days_back", "days_forward"}),
     "report": frozenset({"report_type", "organization", "project_id", "days_stale", "limit"}),
-    "export_contacts": frozenset({"filter_params", "output_path"}),
-    "export_project_team": frozenset({"project_id", "output_path"}),
+    "export_contacts": frozenset({"filter_params"}),
+    "export_project_team": frozenset({"project_id"}),
     "init": frozenset(),
     "status": frozenset(),
 }
 _OP_NOTES = {"contact_list": "only active contacts are listed"}
+# Inner keys of dict-valued parameters, as report.export_contacts_excel and
+# lookup.resolve_contact read them (pinned by tests/test_operation_keys.py).
+_CONTEXT_KEYS = frozenset({"project_id", "organization", "role_name"})
+_NESTED_KEYS = {
+    ("export_contacts", "filter_params"): frozenset({"project_id", "organization", "org_type", "country"}),
+    ("contact_resolve", "context"): _CONTEXT_KEYS,
+    ("contact_resolve_multiple", "context"): _CONTEXT_KEYS,
+}
 
 
 def _check_contact_list_filters(p: dict) -> None:
@@ -290,15 +298,9 @@ async def _execute_operation(op: str, p: dict) -> dict:
             limit=p.get("limit", 50)
         )
     elif op == "export_contacts":
-        return await export_contacts_excel(
-            filter_params=p.get("filter_params"),
-            output_path=p.get("output_path")
-        )
+        return await export_contacts_excel(filter_params=p.get("filter_params"))
     elif op == "export_project_team":
-        return await export_project_team_excel(
-            project_id=p["project_id"],
-            output_path=p.get("output_path")
-        )
+        return await export_project_team_excel(project_id=p["project_id"])
 
     # System operations
     elif op == "init":
@@ -338,7 +340,7 @@ async def contacts(operations: list[dict]) -> dict:
                           Params: limit (default 20), threshold (fuzzy score, default 60).
                           Returns: CONTACT_COMPACT[]
         contact_get     : Full details. Params: id (or email / telegram / phone to look up),
-                          include_channels (bool), include_projects (bool).
+                          include_channels, include_projects (both default false).
                           Returns: CONTACT_FULL, optionally with channels[] and projects[]
         contact_add     : Create. Requires: first_name, last_name. Returns: CONTACT_COMPACT
         contact_update  : Update. Requires: id. Returns: CONTACT_COMPACT
@@ -346,9 +348,18 @@ async def contacts(operations: list[dict]) -> dict:
 
     QUICK LOOKUP (for messaging):
 
-        contact_resolve          : Find by partial name. Returns: id, display_name, org,
+        contact_resolve          : Find by partial name. Requires: identifier. Params: context,
+                                   an object of project_id, organization, role_name used to
+                                   pick among several matches. Returns: id, display_name, org,
                                    preferred_channel, primary_email, telegram_username
-        contact_resolve_multiple : Batch resolve. Returns: resolved[], unresolved[], stats{}
+        contact_resolve_multiple : Batch resolve. Requires: identifiers. Params: context (as above).
+                                   Returns: resolved[], unresolved[], stats{}
+
+    EXPORT (Excel, download link valid 1 hour):
+
+        export_contacts     : Contacts with channels. Params: filter_params, an object of
+                              organization, org_type, country, project_id.
+        export_project_team : Project roster. Requires: project_id.
 
     PROJECT TEAMS:
 
@@ -457,7 +468,7 @@ async def contacts(operations: list[dict]) -> dict:
             op_data = {**op_data, "contact_id": last_contact_id}
 
         try:
-            check_keys(op, op_data, _OP_KEYS, _OP_NOTES)
+            check_keys(op, op_data, _OP_KEYS, _OP_NOTES, _NESTED_KEYS)
             result = await _execute_operation(op, op_data)
             results.append({"index": i, "op": op, "result": result})
             success_count += 1

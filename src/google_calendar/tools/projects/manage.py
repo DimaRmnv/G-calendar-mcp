@@ -434,7 +434,8 @@ async def projects(operations: list[dict]) -> dict:
         project_list_active : Active projects with full structure (phases[].tasks[], universal_tasks[]).
                               Returns: PROJECT_CALENDAR[]
 
-        project_get         : Full project details. Params: id, include_orgs, include_team.
+        project_get         : Full project details. Params: id (or code), include_orgs,
+                              include_team (both default false).
                               Returns: PROJECT_FULL, optionally with orgs[] and team[]
 
         project_add/update/delete/activate/deactivate: Standard CRUD operations.
@@ -442,12 +443,13 @@ async def projects(operations: list[dict]) -> dict:
     PHASES:
 
         phase_list   : Phases of project (compact). Requires: project_id.
-        phase_get    : Phase details. Params: id (or project_id + code), include_tasks.
+        phase_get    : Phase details. Params: id (or project_id + code), include_tasks (default false).
         phase_add/update/delete: Standard CRUD.
 
     TASKS:
 
-        task_list    : Tasks (compact). Requires: phase_id OR project_id. Params: include_universal.
+        task_list    : Tasks (compact). Requires: phase_id OR project_id.
+                       Params: include_universal (default true).
         task_get     : Task details. Requires: id (or code + phase_id / project_id).
         task_add     : Create. Requires: code + (phase_id OR project_id).
                        phase_id → phase-linked task
@@ -460,8 +462,9 @@ async def projects(operations: list[dict]) -> dict:
 
         org_list      : All orgs (compact). Filters: organization_type, country,
                         relationship_status, active_only (default true). Returns: ORG_COMPACT[]
-        org_search    : Search name/short_name. Params: query, limit. Returns: ORG_COMPACT[]
-        org_get       : Full details. Params: id OR name, include_projects.
+        org_search    : Search name/short_name. Requires: query. Params: limit (default 20).
+                        Returns: ORG_COMPACT[]
+        org_get       : Full details. Params: id OR name, include_projects (default false).
                         Returns: ORG_FULL, optionally with projects[]
         org_add/update/delete: Standard CRUD. Returns: ORG_COMPACT or {deleted, id}.
 
