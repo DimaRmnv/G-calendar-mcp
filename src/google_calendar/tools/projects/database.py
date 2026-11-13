@@ -827,25 +827,44 @@ async def org_add(
         }
 
 
+ORG_BY_NAME = ("SELECT * FROM organizations WHERE lower(name) = lower($1) "
+               "OR lower(short_name) = lower($1) OR lower(name_local) = lower($1) ORDER BY id")
+
+
 async def org_get(
     id: Optional[int] = None,
     name: Optional[str] = None,
     include_projects: bool = False
 ) -> Optional[dict]:
-    """Get organization (ORG_FULL).
+    """Get organization (ORG_FULL), or None when nothing matches.
 
     Args:
         id: Organization ID
-        name: Organization name
+        name: The whole full name, short name or local name, any case
         include_projects: If True, include projects: [{id, code, description, org_role, is_lead}]
+
+    An id wins over a name. Raises ValueError when neither id nor a name is given, when
+    the name is not text, or when it matches several organizations (the message lists
+    their ids).
     """
+    if id is None:
+        if name is not None and not isinstance(name, str):
+            raise ValueError("org_get: name must be text")
+        name = (name or "").strip()
+        if not name:
+            raise ValueError("org_get needs id or name")
     async with get_db() as conn:
         if id is not None:
             row = await conn.fetchrow("SELECT * FROM organizations WHERE id = $1", id)
-        elif name is not None:
-            row = await conn.fetchrow("SELECT * FROM organizations WHERE name = $1", name)
         else:
-            return None
+            # Whole-name equality, not ILIKE: `_` and `%` in a name are not wildcards here.
+            rows = await conn.fetch(ORG_BY_NAME, name)
+            if len(rows) > 1:
+                found = ", ".join(f"{r['id']} ({r['name']})" for r in rows)
+                raise ValueError(
+                    f"Several organizations are called {name!r}: {found}. Pass id instead."
+                )
+            row = rows[0] if rows else None
 
         if not row:
             return None
