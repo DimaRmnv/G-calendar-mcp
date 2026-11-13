@@ -126,12 +126,31 @@ class RedactSecretsFilter(logging.Filter):
 
 
 def uvicorn_log_config() -> dict[str, Any]:
-    """uvicorn's default logging configuration with the redaction filter on every handler."""
+    """The server's logging configuration: uvicorn's default plus the app's own logger.
+
+    Without a handler of its own the `google_calendar` logger reached the container
+    log only at WARNING and above (Python's last-resort handler), so INFO lines such as
+    the export cleanup and input-error reasons were lost. Every handler, the app's
+    included, passes records through the redaction filter.
+    """
     from uvicorn.config import LOGGING_CONFIG
 
     config = copy.deepcopy(LOGGING_CONFIG)
     config.setdefault("filters", {})["redact_secrets"] = {
         "()": "google_calendar.log_redaction.RedactSecretsFilter",
+    }
+    config["formatters"]["app"] = {
+        "()": "uvicorn.logging.DefaultFormatter",
+        "fmt": "%(levelprefix)s %(name)s: %(message)s",
+        "use_colors": None,
+    }
+    config["handlers"]["app"] = {
+        "formatter": "app",
+        "class": "logging.StreamHandler",
+        "stream": "ext://sys.stderr",
+    }
+    config["loggers"]["google_calendar"] = {
+        "handlers": ["app"], "level": "INFO", "propagate": False,
     }
     for handler in config["handlers"].values():
         handler.setdefault("filters", []).append("redact_secrets")

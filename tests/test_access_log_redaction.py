@@ -62,7 +62,7 @@ def served(monkeypatch, tmp_path):
     # uvicorn configured its loggers in Config(); point their handlers at a buffer so the
     # formatted lines, after every handler filter, can be read back.
     buffer = io.StringIO()
-    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access", "google_calendar"):
         for handler in logging.getLogger(name).handlers:
             if isinstance(handler, logging.StreamHandler):
                 handler.setStream(buffer)

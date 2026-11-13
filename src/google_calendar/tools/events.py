@@ -83,8 +83,11 @@ def events(
     4. Timezone: from user memory, or calendars(action="settings") if uncertain
 
     Actions:
-        list: Events in time range. Use period='today'|'tomorrow'|'week'|'month' OR time_min/time_max
-              (only one bound given → 7-day window from/to it)
+        list: Events in time range. Use period OR time_min/time_max
+              (only one bound given → 7-day window from/to it; neither → next 7 days).
+              period: 'yesterday'|'today'|'tomorrow' is that calendar day; 'week' is the
+              7 days and 'month' the 30 days from the start of today, not the calendar
+              week or month
         create: New event. Requires summary, start, end. Format summary per calendar-manager skill.
         get: Full event details. Requires event_id
         update: Modify event. Requires event_id. Use scope='single'|'all' for recurring.
@@ -128,6 +131,8 @@ def events(
         events(action="update", event_id="abc", summary="New Title", scope="all")
     """
     if action == "list":
+        if period is not None and period not in _PERIODS:
+            raise InputError(f"Unknown period {period!r}: use {', '.join(_PERIODS[:-1])} or {_PERIODS[-1]}")
         return _list_events(
             calendar_id=calendar_id,
             time_min=time_min,
@@ -252,6 +257,7 @@ def events(
 # Helper functions
 
 _DEFAULT_WINDOW = timedelta(days=7)
+_PERIODS = ("yesterday", "today", "tomorrow", "week", "month")
 _SEARCH_SPAN = timedelta(days=365)
 
 
