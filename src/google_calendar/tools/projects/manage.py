@@ -465,6 +465,8 @@ async def projects(operations: list[dict]) -> dict:
         org_search    : Search name/short_name. Requires: query. Params: limit (default 20).
                         Returns: ORG_COMPACT[]
         org_get       : Full details. Params: id OR name, include_projects (default false).
+                        A name matches the whole full, short or local name, any case.
+                        Several matches are refused with their ids; none returns null.
                         Returns: ORG_FULL, optionally with projects[]
         org_add/update/delete: Standard CRUD. Returns: ORG_COMPACT or {deleted, id}.
 
