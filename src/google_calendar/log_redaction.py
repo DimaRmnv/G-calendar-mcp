@@ -5,6 +5,10 @@ Google start link carries a signed `?token=`, and the Google callback carries
 the authorization `code` and `state`. uvicorn logs the path and the whole query
 string of every request, so `serve()` gives uvicorn a logging configuration whose
 handlers pass each record through `RedactSecretsFilter` first.
+
+Everything here is a single linear pass (split / partition / unquote): the filter
+runs on every request inside the event loop, so a backtracking pattern would let one
+long URL stall the server.
 """
 from __future__ import annotations
 
@@ -12,7 +16,7 @@ import copy
 import logging
 import re
 from typing import Any
-from urllib.parse import unquote_plus
+from urllib.parse import quote, unquote, unquote_plus
 
 REDACTED = "REDACTED"
 
@@ -23,37 +27,92 @@ SECRET_PARAMS = frozenset({
     "access_token", "refresh_token", "client_secret", "secret",
 })
 
-_QUERY_PAIR = re.compile(r'([?&])([^=&#\s"]+)=([^&#\s"]*)')
-# The auth middleware reads the key from the segment after any `/key/`.
-_KEY_SEGMENT = re.compile(r'/key/[^/?#\s"]+')
+# Starlette's request.url (which the auth middleware reads the /key/ segment from) is
+# built with urlsplit, and urlsplit deletes these characters wherever they are.
+_URLSPLIT_DROPS = str.maketrans("", "", "\t\r\n")
+
+# Free text is cut into tokens at whitespace and quotes before tokens are redacted.
+_TOKEN_BREAK = re.compile(r'(\s+|["\'])')
 
 
-def _redact_pair(match: re.Match) -> str:
-    sep, name, value = match.groups()
-    if unquote_plus(name).lower() in SECRET_PARAMS:
-        return f"{sep}{name}={REDACTED}"
-    return match.group(0)
+def _redact_query(query: str) -> str:
+    """Replace the value of every credential parameter; `&` and `;` both separate.
+
+    `;` is no separator for Starlette, and a name led by `?` is not the parameter it
+    spells, so such a key is refused by the server; it is still a real key, so it is
+    redacted all the same.
+    """
+    pieces = re.split(r"([&;])", query)
+    for i in range(0, len(pieces), 2):
+        name, eq, _ = pieces[i].partition("=")
+        if eq and unquote_plus(name).translate(_URLSPLIT_DROPS).lstrip("?").lower() in SECRET_PARAMS:
+            pieces[i] = f"{name}={REDACTED}"
+    return "".join(pieces)
 
 
-def redact(text: str) -> str:
-    """Return `text` with URL credentials replaced by REDACTED."""
-    text = _KEY_SEGMENT.sub(f"/key/{REDACTED}", text)
-    return _QUERY_PAIR.sub(_redact_pair, text)
+def _redact_path(path: str) -> str:
+    """Replace the segment after every `/key/`, as the auth middleware would read it.
+
+    The middleware reads the decoded path with tab, CR and LF removed (urlsplit), so
+    `/k%09ey/<key>/` is a key too. The path is rewritten from that reading only when it
+    holds `/key/`; otherwise it is returned as logged.
+    """
+    view = unquote(path).translate(_URLSPLIT_DROPS)
+    if "/key/" not in view:
+        return path
+    head, *chunks = view.split("/key/")
+    out = [quote(head)]
+    for chunk in chunks:
+        _, slash, rest = chunk.partition("/")
+        out.append(f"/key/{REDACTED}{slash}{quote(rest)}")
+    return "".join(out)
+
+
+def redact_url(url: str) -> str:
+    """A path with an optional query string, with its credentials replaced by REDACTED."""
+    path, mark, query = url.partition("?")
+    return _redact_path(path) + mark + (_redact_query(query) if mark else "")
+
+
+def redact_text(text: str) -> str:
+    """Free text with every URL-like token passed through redact_url."""
+    parts = _TOKEN_BREAK.split(text)
+    for i in range(0, len(parts), 2):
+        if "?" in parts[i] or "/" in parts[i]:
+            parts[i] = redact_url(parts[i])
+    return "".join(parts)
 
 
 class RedactSecretsFilter(logging.Filter):
-    """Redact URL credentials in a record's arguments and message.
+    """Redact URL credentials in every record a handler emits.
 
-    uvicorn's access formatter unpacks the five arguments of the access record
-    (client, method, path with query, HTTP version, status), so the arguments keep
-    their shape and only string ones are rewritten.
+    uvicorn's access record keeps its five arguments (client, method, path with query,
+    HTTP version, status) because its formatter unpacks them; only the path is
+    rewritten. Any other record is formatted first and the resulting text redacted, so
+    a credential is found whatever the template or argument types. Such a record is
+    rewritten only when redaction changed something.
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if isinstance(record.msg, str):
-            record.msg = redact(record.msg)
-        if isinstance(record.args, tuple):
-            record.args = tuple(redact(a) if isinstance(a, str) else a for a in record.args)
+        args = record.args
+        if (record.name == "uvicorn.access" and isinstance(args, tuple) and len(args) == 5
+                and isinstance(args[2], str)):
+            record.args = (*args[:2], redact_url(args[2]), *args[3:])
+            return True
+        broken = False
+        try:
+            message = record.getMessage()
+        except (TypeError, ValueError, KeyError):
+            # A log call whose arguments do not fit its template: logging would print the
+            # raw arguments to stderr, so keep the template and drop them.
+            message = f"{record.msg} [log arguments dropped: they did not fit the message]"
+            broken = True
+        redacted = redact_text(message)
+        if broken or redacted != message:
+            record.msg = redacted
+            record.args = ()
+            # uvicorn's coloured formatter would re-apply the original arguments to this.
+            record.__dict__.pop("color_message", None)
         return True
 
 
