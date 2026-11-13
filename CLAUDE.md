@@ -204,6 +204,9 @@ Resource.
 - Требуется корректный `GCAL_MCP_SERVER_BASE_URL` — иначе метаданные отдают 500.
 - Аутентификация по API-ключу (заголовок/квери) продолжает работать **параллельно**
   с OAuth, ничего не ломая для существующих клиентов.
+- Секреты из URL в лог сервера не попадают: `?api_key=`, сегмент `/key/{k}/`,
+  `token`, `code`, `state` и другие из `SECRET_PARAMS` uvicorn пишет как `REDACTED`
+  (`log_redaction.py`, конфиг логов передаёт `serve()`).
 
 ## Google OAuth client: agentic-классификация (Google Cloud)
 
