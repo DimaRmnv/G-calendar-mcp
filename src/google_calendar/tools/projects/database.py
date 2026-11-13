@@ -843,12 +843,16 @@ async def org_get(
         name: The whole full name, short name or local name, any case
         include_projects: If True, include projects: [{id, code, description, org_role, is_lead}]
 
-    Raises ValueError when neither id nor a name is given, or when the name matches
-    several organizations (the message lists their ids).
+    An id wins over a name. Raises ValueError when neither id nor a name is given, when
+    the name is not text, or when it matches several organizations (the message lists
+    their ids).
     """
-    name = name.strip() if name else None
-    if id is None and not name:
-        raise ValueError("org_get needs id or name")
+    if id is None:
+        if name is not None and not isinstance(name, str):
+            raise ValueError("org_get: name must be text")
+        name = (name or "").strip()
+        if not name:
+            raise ValueError("org_get needs id or name")
     async with get_db() as conn:
         if id is not None:
             row = await conn.fetchrow("SELECT * FROM organizations WHERE id = $1", id)

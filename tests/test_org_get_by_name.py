@@ -117,3 +117,23 @@ async def test_the_id_lookup_is_unchanged(db):
 
     assert result["result"]["id"] == 5
     assert sent == [(BY_ID, (5,))]
+
+
+@pytest.mark.parametrize("name", ["Other Org", 5, None, "  "])
+async def test_an_id_wins_over_any_name(db, name):
+    sent, state = db
+    state["rows"] = [ADB]
+
+    result = await _org_get(id=5, name=name)
+
+    assert result["result"]["id"] == 5
+    assert sent == [(BY_ID, (5,))]
+
+
+async def test_a_name_that_is_not_text_is_refused_before_any_query(db):
+    sent, state = db
+
+    result = await _org_get(name=5)
+
+    assert result["error"] == "org_get: name must be text"
+    assert sent == []
