@@ -70,6 +70,14 @@ INPUT_ERRORS = [
      "Unknown timezone 'Mars/Olympus': expected an IANA name such as 'Europe/London'"),
     ("events", {"action": "search", "query": "x", "timezone": "Mars/Olympus"},
      "Unknown timezone 'Mars/Olympus': expected an IANA name such as 'Europe/London'"),
+    ("events", {"action": "create", "summary": "x", "start": "2026-11-20T10:00:00",
+                "end": "2026-11-20T11:00:00", "timezone": "Mars/Olympus"}, "Unknown timezone 'Mars/Olympus': expected an IANA name such as 'Europe/London'"),
+    ("events", {"action": "update", "event_id": "e1", "timezone": "Mars/Olympus"}, "Unknown timezone 'Mars/Olympus': expected an IANA name such as 'Europe/London'"),
+    ("events", {"action": "update", "event_id": "e1", "start": "2026-11-20T10:00:00",
+                "end": "2026-11-20T11:00:00", "timezone": "Mars/Olympus"}, "Unknown timezone 'Mars/Olympus': expected an IANA name such as 'Europe/London'"),
+    ("calendars", {"action": "create", "summary": "x", "timezone": "Mars/Olympus"}, "Unknown timezone 'Mars/Olympus': expected an IANA name such as 'Europe/London'"),
+    ("calendars", {"action": "update", "calendar_id": "c1", "timezone": "Mars/Olympus"}, "Unknown timezone 'Mars/Olympus': expected an IANA name such as 'Europe/London'"),
+    ("calendars", {"action": "set_timezone", "timezone": "Mars/Olympus"}, "Unknown timezone 'Mars/Olympus': expected an IANA name such as 'Europe/London'"),
     ("events", {"action": "get"}, "event_id is required for 'get' action"),
     ("events", {"action": "update"}, "event_id is required for 'update' action"),
     ("events", {"action": "delete"}, "event_id is required for 'delete' action"),
@@ -166,20 +174,6 @@ async def test_a_failure_of_the_server_keeps_error_and_the_traceback(fake, recor
     assert "boom" in text
     logged = [r for r in records if r.getMessage() == "Error calling tool 'events'"]
     assert [(r.levelno, bool(r.exc_info)) for r in logged] == [(logging.ERROR, True)]
-
-
-async def test_a_new_timezone_for_an_event_is_checked_before_the_update(fake, records):
-    fake.respond("events", "get", {"id": "e1", "start": {"dateTime": "2026-11-17T10:00:00+02:00"},
-                                   "end": {"dateTime": "2026-11-17T11:00:00+02:00"}})
-
-    is_error, text = await _call("events", {"action": "update", "event_id": "e1",
-                                            "timezone": "Mars/Olympus"})
-
-    assert is_error
-    assert text == "Unknown timezone 'Mars/Olympus': expected an IANA name such as 'Europe/London'"
-    assert {(r, m) for r, m, _ in fake.calls} == {("events", "get")}
-    logged = [r for r in records if r.getMessage() == "Error calling tool 'events'"]
-    assert [(r.levelno, bool(r.exc_info)) for r in logged] == [(logging.INFO, False)]
 
 
 async def test_responding_to_an_event_one_is_not_invited_to_is_an_input_error(

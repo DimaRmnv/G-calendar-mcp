@@ -20,7 +20,7 @@ from google_calendar.api.calendars import (
     get_calendar_colors,
 )
 from google_calendar.api.client import execute_with_retry, get_service, handle_auth_errors
-from google_calendar.errors import InputError
+from google_calendar.errors import InputError, zone
 from google_calendar.utils.config import list_accounts as config_list_accounts, get_default_account
 
 logger = logging.getLogger(__name__)
@@ -77,6 +77,10 @@ def calendars(
         calendars(action="settings", account="work")
         calendars(action="set_timezone", timezone="Asia/Bangkok")
     """
+    # A timezone the caller names is checked before Google is asked to store it.
+    if timezone and action in ("create", "update", "set_timezone"):
+        zone(timezone)
+
     # Calendar management actions
     if action == "list":
         return _list_calendars(account)

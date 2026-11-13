@@ -147,6 +147,8 @@ def events(
             raise InputError("summary is required for 'create' action")
         if not start or not end:
             raise InputError("start and end are required for 'create' action")
+        if timezone:
+            zone(timezone)
         return _create_event(
             summary=summary,
             start=start,
@@ -179,6 +181,8 @@ def events(
     elif action == "update":
         if not event_id:
             raise InputError("event_id is required for 'update' action")
+        if timezone:
+            zone(timezone)
         return _update_event(
             event_id=event_id,
             calendar_id=calendar_id,
