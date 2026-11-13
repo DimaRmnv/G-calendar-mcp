@@ -1,7 +1,8 @@
 """Time values sent to the Google Calendar API."""
 
 from datetime import date, datetime, time, timedelta
-from zoneinfo import ZoneInfo
+
+from google_calendar.errors import InputError, zone
 
 
 def has_offset(value: str) -> bool:
@@ -19,7 +20,7 @@ def as_aware(value: str, timezone: str | None) -> datetime:
         return parsed
     if not timezone:
         raise ValueError(f"No timezone to interpret the local time {value}")
-    return parsed.replace(tzinfo=ZoneInfo(timezone))
+    return parsed.replace(tzinfo=zone(timezone))
 
 
 def to_rfc3339(value: str, timezone: str | None) -> str:
@@ -45,7 +46,7 @@ def check_bounds(*values: str | None) -> None:
             else:
                 date.fromisoformat(value)
         except ValueError as exc:
-            raise ValueError(
+            raise InputError(
                 f"Invalid time bound {value!r}: expected a date ('2026-11-09') "
                 "or an ISO datetime ('2026-11-09T10:00:00')"
             ) from exc
@@ -70,7 +71,7 @@ def window_point(value: str, timezone: str | None, *, end: bool) -> datetime:
     day = date.fromisoformat(value)
     if end:
         day += timedelta(days=1)
-    return datetime.combine(day, time(), ZoneInfo(timezone))
+    return datetime.combine(day, time(), zone(timezone))
 
 
 def window_bound(value: str, timezone: str | None, *, end: bool) -> str:

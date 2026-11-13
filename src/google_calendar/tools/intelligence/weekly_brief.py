@@ -6,10 +6,10 @@ Generate synthesized weekly schedule overview with priorities.
 
 from typing import Optional
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
 
 from google_calendar.api.events import list_all_events
 from google_calendar.api.client import get_user_timezone, handle_auth_errors
+from google_calendar.errors import InputError, zone
 
 
 @handle_auth_errors
@@ -49,16 +49,26 @@ def weekly_brief(
         weekly_brief(account="work")
         weekly_brief(start_date="2025-01-20", account="personal")
     """
+    # A malformed start_date is refused before Google is asked for the account zone.
+    week_day = None
+    if start_date:
+        try:
+            week_day = datetime.strptime(start_date, "%Y-%m-%d")
+        except ValueError as exc:
+            raise InputError(
+                f"Invalid start_date {start_date!r}: expected a date such as '2026-11-16'"
+            ) from exc
+
     # Get timezone
     if not timezone:
         timezone = get_user_timezone(account)
-    tz = ZoneInfo(timezone)
+    tz = zone(timezone)
     
     # Calculate week bounds
     now = datetime.now(tz)
     
-    if start_date:
-        week_start = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=tz)
+    if week_day:
+        week_start = week_day.replace(tzinfo=tz)
     else:
         # Find Monday of current week
         days_since_monday = now.weekday()

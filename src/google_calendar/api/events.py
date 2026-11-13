@@ -14,12 +14,12 @@ import logging
 import uuid
 from typing import Optional
 from datetime import datetime
-from zoneinfo import ZoneInfo
 
 from googleapiclient.errors import HttpError
 
 from google_calendar.api.client import execute_with_retry, get_service
 from google_calendar.api.timeutil import to_rfc3339
+from google_calendar.errors import zone
 
 logger = logging.getLogger(__name__)
 
@@ -318,7 +318,7 @@ def update_event(
             end_dt = datetime.fromisoformat(end_dt_str.replace("Z", "+00:00"))
 
             # Convert to new timezone
-            new_tz = ZoneInfo(timezone)
+            new_tz = zone(timezone)
             start_local = start_dt.astimezone(new_tz)
             end_local = end_dt.astimezone(new_tz)
 

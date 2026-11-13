@@ -28,6 +28,7 @@ from googleapiclient.discovery import build, Resource
 from googleapiclient.errors import HttpError
 
 from google_calendar.settings import settings
+from google_calendar.errors import InputError
 from google_calendar.utils.config import (
     get_token_path,
     get_oauth_client_path,
@@ -482,7 +483,7 @@ def get_service(account: Optional[str] = None) -> Resource:
         account = get_default_account()
 
     if account is None:
-        raise ValueError(
+        raise InputError(
             "No account specified and no default account configured. "
             "Run 'google-calendar-mcp auth' to add an account."
         )
@@ -490,7 +491,7 @@ def get_service(account: Optional[str] = None) -> Resource:
     # Check account exists
     account_info = get_account(account)
     if account_info is None:
-        raise ValueError(
+        raise InputError(
             f"Account '{account}' not found. "
             f"Run 'google-calendar-mcp auth' to add it."
         )

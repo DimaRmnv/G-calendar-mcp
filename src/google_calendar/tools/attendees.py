@@ -9,6 +9,7 @@ from typing import Optional, Literal
 
 from google_calendar.api.events import get_event, update_event
 from google_calendar.api.client import get_authorized_email, handle_auth_errors
+from google_calendar.errors import InputError
 
 
 @handle_auth_errors
@@ -64,27 +65,27 @@ def attendees(
 
     elif action == "add":
         if not emails:
-            raise ValueError("emails parameter required for 'add' action")
+            raise InputError("emails parameter required for 'add' action")
         return _add_attendees(event_id, emails, calendar_id, send_updates, account)
 
     elif action == "remove":
         if not emails:
-            raise ValueError("emails parameter required for 'remove' action")
+            raise InputError("emails parameter required for 'remove' action")
         return _remove_attendees(event_id, emails, calendar_id, send_updates, account)
 
     elif action == "resend":
         if not emails:
-            raise ValueError("emails parameter required for 'resend' action")
+            raise InputError("emails parameter required for 'resend' action")
         return _resend_invites(event_id, emails, calendar_id, send_updates, account)
 
     elif action == "respond":
         if not response:
-            raise ValueError("response parameter required for 'respond' action")
+            raise InputError("response parameter required for 'respond' action")
         return _respond_to_event(event_id, response, comment, calendar_id, account)
 
     else:
         valid_actions = "list, add, remove, resend, respond"
-        raise ValueError(f"Invalid action: {action}. Use one of: {valid_actions}")
+        raise InputError(f"Invalid action: {action}. Use one of: {valid_actions}")
 
 
 def _list_attendees(
@@ -262,9 +263,9 @@ def _respond_to_event(
     account: Optional[str],
 ) -> dict:
     """Respond to an event invitation."""
-    valid_responses = {"accepted", "declined", "tentative"}
+    valid_responses = ("accepted", "declined", "tentative")
     if response not in valid_responses:
-        raise ValueError(f"Invalid response: {response}. Use one of: {', '.join(valid_responses)}")
+        raise InputError(f"Invalid response: {response}. Use one of: {', '.join(valid_responses)}")
 
     # Get current user's email
     user_email = get_authorized_email(account)
@@ -291,7 +292,7 @@ def _respond_to_event(
         updated_attendees.append(att)
 
     if not self_found:
-        raise ValueError(
+        raise InputError(
             f"You ({user_email}) are not an attendee of this event. "
             "You can only respond to events you've been invited to."
         )
