@@ -100,6 +100,14 @@ ACCEPTED = [
     f"/mcp/calendar/ke%09y/{KEY}{ACCOUNTS}",
     f"/mcp/calendar/key/{KEY}%3Fx{ACCOUNTS}",
 ]
+# WebSocket lines are written on uvicorn.error with the whole path and query as one
+# argument; a quote in the query must not end the redaction early.
+WEBSOCKET_QUOTED = [
+    f"/mcp/calendar/mcp?x='&api_key={KEY}",
+    f'/mcp/calendar/mcp?x="&api_key={KEY}',
+    '/mcp/calendar/mcp?note="hi"&code=CC-5e5a7f44&state=CS-6f4b8a55',
+    f"/mcp/calendar/mcp?api_key='s-{KEY}",
+]
 # The real key in forms the server refuses (401): still never written down.
 REFUSED = [
     f"/mcp/calendar{ACCOUNTS}?x=1;api_key={KEY}",
@@ -119,12 +127,15 @@ def test_url_credentials_never_reach_the_log(served):
     send("/mcp/calendar/oauth/callback?code=CC-5e5a7f44&state=CS-6f4b8a55")
     send('/mcp/calendar/oauth/callback?code=AB"CD&state=x')
     send(f"/mcp/calendar/mcp?api_key={KEY}", websocket=True)
+    for target in WEBSOCKET_QUOTED:
+        send(target, websocket=True)
     time.sleep(0.3)
     log = buffer.getvalue()
 
     # Every request was logged, so the absence below is not vacuous.
     assert log.count('"GET /mcp/calendar/') == 1 + len(ACCEPTED) + len(REFUSED) + 3, log
     assert '"WebSocket /mcp/calendar/mcp?api_key=REDACTED"' in log, log
+    assert log.count('"WebSocket /mcp/calendar/mcp?') == 1 + len(WEBSOCKET_QUOTED), log
     assert KEY not in log, log
     for secret in OTHER_SECRETS:
         assert secret not in log, log
@@ -155,6 +166,7 @@ def test_url_credentials_never_reach_the_log(served):
     ("/a/key/k1/b/key/k2/c", "/a/key/REDACTED/b/key/REDACTED/c"),
     ("/mcp/calendar/export/0b9f1c1e?x=1", "/mcp/calendar/export/0b9f1c1e?x=1"),
     ("/mcp/calendar/te%20st?x=1", "/mcp/calendar/te%20st?x=1"),
+    ("/a%1Bb/key/k/c%1Bd%0A", "/a%1Bb/key/REDACTED/c%1Bd"),
 ])
 def test_redact_url(text, expected):
     from google_calendar.log_redaction import redact_url
@@ -199,10 +211,18 @@ def test_the_access_record_keeps_its_five_arguments():
     ("callback /cb?code=%s received", ("GOOGLE-CODE-123",), "callback /cb?code=REDACTED received"),
     ("bytes %s", (b"/p?api_key=k",), "bytes b'/p?api_key=REDACTED'"),
     ("%(u)s", ({"u": "/p?token=t"},), "/p?token=REDACTED"),
+    ("%(u)s", ({"u": "/p?q='&token=t"},), "/p?q='&token=REDACTED"),
     ('%s - "WebSocket %s" 403', ("1.2.3.4:5", "/x/key/k/y"),
      '1.2.3.4:5 - "WebSocket /x/key/REDACTED/y" 403'),
+    ('%s - "WebSocket %s" 403', ("1.2.3.4:5", "/x?q='&api_key=k"),
+     '1.2.3.4:5 - "WebSocket /x?q=\'&api_key=REDACTED" 403'),
+    ("seen /x/key/k/y in a template", (), "seen /x/key/REDACTED/y in a template"),
     ("%s %s", ("only-one",), "%s %s [log arguments dropped: they did not fit the message]"),
-], ids=["template", "bytes", "dict", "websocket", "broken-call"])
+    ("%(u)s %(missing)s", ({"u": "x"},),
+     "%(u)s %(missing)s [log arguments dropped: they did not fit the message]"),
+    ("50%% done %(u", ({"u": "x"},), "50%% done %(u [log arguments dropped: they did not fit the message]"),
+], ids=["template", "bytes", "dict", "dict-quote", "websocket", "websocket-quote", "path-in-template",
+        "broken-type", "broken-key", "broken-value"])
 def test_any_other_record_is_formatted_then_redacted(msg, args, expected):
     from google_calendar.log_redaction import RedactSecretsFilter
 

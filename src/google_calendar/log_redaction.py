@@ -15,6 +15,7 @@ from __future__ import annotations
 import copy
 import logging
 import re
+from collections.abc import Mapping
 from typing import Any
 from urllib.parse import quote, unquote, unquote_plus
 
@@ -88,9 +89,10 @@ class RedactSecretsFilter(logging.Filter):
 
     uvicorn's access record keeps its five arguments (client, method, path with query,
     HTTP version, status) because its formatter unpacks them; only the path is
-    rewritten. Any other record is formatted first and the resulting text redacted, so
-    a credential is found whatever the template or argument types. Such a record is
-    rewritten only when redaction changed something.
+    rewritten. In any other record each text argument is read whole as a URL (uvicorn's
+    WebSocket lines pass the path with its query as one), then the formatted text is
+    redacted again token by token for URLs written into the template itself. Such a
+    record is rewritten only when redaction changed something.
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
@@ -99,16 +101,23 @@ class RedactSecretsFilter(logging.Filter):
                 and isinstance(args[2], str)):
             record.args = (*args[:2], redact_url(args[2]), *args[3:])
             return True
+        if isinstance(args, tuple):
+            safe_args: Any = tuple(redact_url(a) if isinstance(a, str) else a for a in args)
+        elif isinstance(args, Mapping):
+            safe_args = {k: redact_url(v) if isinstance(v, str) else v for k, v in args.items()}
+        else:
+            safe_args = args
         broken = False
         try:
-            message = record.getMessage()
+            original = record.getMessage()
+            message = str(record.msg) % safe_args if args else original
         except (TypeError, ValueError, KeyError):
             # A log call whose arguments do not fit its template: logging would print the
             # raw arguments to stderr, so keep the template and drop them.
-            message = f"{record.msg} [log arguments dropped: they did not fit the message]"
+            original = message = f"{record.msg} [log arguments dropped: they did not fit the message]"
             broken = True
         redacted = redact_text(message)
-        if broken or redacted != message:
+        if broken or redacted != original:
             record.msg = redacted
             record.args = ()
             # uvicorn's coloured formatter would re-apply the original arguments to this.
