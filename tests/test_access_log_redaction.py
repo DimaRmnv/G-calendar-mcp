@@ -98,6 +98,10 @@ ACCEPTED = [
     f"/mcp/calendar/%0Akey/{KEY}{ACCOUNTS}",
     f"/mcp/calendar/key%0D/{KEY}{ACCOUNTS}",
     f"/mcp/calendar/ke%09y/{KEY}{ACCOUNTS}",
+]
+# Whether the server reads this as the key depends on the Starlette version (1.3 does,
+# 1.10 does not); either way it is never written down.
+EITHER_WAY = [
     f"/mcp/calendar/key/{KEY}%3Fx{ACCOUNTS}",
 ]
 # WebSocket lines are written on uvicorn.error with the whole path and query as one
@@ -123,6 +127,8 @@ def test_url_credentials_never_reach_the_log(served):
         assert send(target) != 401, f"auth refused {target}"
     for target in REFUSED:
         assert send(target) == 401, f"auth accepted {target}"
+    for target in EITHER_WAY:
+        send(target)
     send("/mcp/calendar/oauth/start/work?token=ST-4d6f6e33")
     send("/mcp/calendar/oauth/callback?code=CC-5e5a7f44&state=CS-6f4b8a55")
     send('/mcp/calendar/oauth/callback?code=AB"CD&state=x')
@@ -133,7 +139,7 @@ def test_url_credentials_never_reach_the_log(served):
     log = buffer.getvalue()
 
     # Every request was logged, so the absence below is not vacuous.
-    assert log.count('"GET /mcp/calendar/') == 1 + len(ACCEPTED) + len(REFUSED) + 3, log
+    assert log.count('"GET /mcp/calendar/') == 1 + len(ACCEPTED) + len(REFUSED) + len(EITHER_WAY) + 3, log
     assert '"WebSocket /mcp/calendar/mcp?api_key=REDACTED"' in log, log
     assert log.count('"WebSocket /mcp/calendar/mcp?') == 1 + len(WEBSOCKET_QUOTED), log
     assert KEY not in log, log
