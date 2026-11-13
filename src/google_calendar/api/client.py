@@ -566,6 +566,8 @@ def get_authorized_email(account: str) -> Optional[str]:
     """
     try:
         return verify_credentials(account).get("email")
+    except InputError:
+        raise  # an unknown account is the caller's error, not a failed lookup
     except ValueError:
         return None
 

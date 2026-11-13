@@ -5,6 +5,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastmcp.exceptions import ToolError
 
+logger = logging.getLogger(__name__)
+
 
 class InputError(ToolError, ValueError):
     """A missing or malformed parameter, an unknown action, timezone or account.
@@ -18,6 +20,9 @@ class InputError(ToolError, ValueError):
 
     def __init__(self, message: str):
         super().__init__(message, log_level=logging.INFO)
+        # fastmcp's own line names only the tool. The reason is logged here, as a repr so
+        # that a caller's value with a line break cannot forge a log line.
+        logger.info("Input error: %r", message)
 
 
 def zone(name: str) -> ZoneInfo:

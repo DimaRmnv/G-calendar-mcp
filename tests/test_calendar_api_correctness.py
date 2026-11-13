@@ -265,6 +265,23 @@ def test_list_without_bounds_covers_the_next_seven_days(fake, frozen_now):
                                                   "2026-11-19T17:30:00+02:00")
 
 
+@pytest.mark.parametrize("period, expected", [
+    ("yesterday", ("2026-11-11T00:00:00+02:00", "2026-11-12T00:00:00+02:00")),
+    ("today", ("2026-11-12T00:00:00+02:00", "2026-11-13T00:00:00+02:00")),
+    ("tomorrow", ("2026-11-13T00:00:00+02:00", "2026-11-14T00:00:00+02:00")),
+    ("week", ("2026-11-12T00:00:00+02:00", "2026-11-19T00:00:00+02:00")),
+    ("month", ("2026-11-12T00:00:00+02:00", "2026-12-12T00:00:00+02:00")),
+    ("", ("2026-11-12T17:30:00+02:00", "2026-11-19T17:30:00+02:00")),  # as no period
+])
+def test_each_period_is_the_window_the_docstring_states(fake, frozen_now, period, expected):
+    fake.respond("events", "list", {"items": []})
+
+    events(action="list", account="work", period=period)
+
+    sent = fake.params("events", "list")[-1]
+    assert (sent["timeMin"], sent["timeMax"]) == expected
+
+
 def test_freebusy_query_reads_a_naive_window_in_the_account_timezone(fake):
     fake.respond("freebusy", "query", {"calendars": {"primary": {"busy": []}}})
 

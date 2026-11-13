@@ -78,6 +78,10 @@ INPUT_ERRORS = [
     ("calendars", {"action": "create", "summary": "x", "timezone": "Mars/Olympus"}, "Unknown timezone 'Mars/Olympus': expected an IANA name such as 'Europe/London'"),
     ("calendars", {"action": "update", "calendar_id": "c1", "timezone": "Mars/Olympus"}, "Unknown timezone 'Mars/Olympus': expected an IANA name such as 'Europe/London'"),
     ("calendars", {"action": "set_timezone", "timezone": "Mars/Olympus"}, "Unknown timezone 'Mars/Olympus': expected an IANA name such as 'Europe/London'"),
+    ("events", {"action": "list", "period": "this_week"},
+     "Unknown period 'this_week': use yesterday, today, tomorrow, week or month"),
+    ("events", {"action": "list", "period": "Today"},
+     "Unknown period 'Today': use yesterday, today, tomorrow, week or month"),
     ("events", {"action": "get"}, "event_id is required for 'get' action"),
     ("events", {"action": "update"}, "event_id is required for 'update' action"),
     ("events", {"action": "delete"}, "event_id is required for 'delete' action"),
@@ -146,6 +150,17 @@ async def test_an_unknown_or_missing_account_is_an_input_error(records, argument
     assert is_error
     assert text.startswith(start)
     logged = [r for r in records if r.getMessage() == "Error calling tool 'calendars'"]
+    assert [(r.levelno, bool(r.exc_info)) for r in logged] == [(logging.INFO, False)]
+
+
+async def test_responding_with_an_unknown_account_is_that_input_error(records):
+    # get_authorized_email used to swallow it and answer "Could not determine user email".
+    is_error, text = await _call("attendees", {"action": "respond", "event_id": "e1",
+                                               "response": "accepted", "account": "nosuch"})
+
+    assert is_error
+    assert text.startswith("Account 'nosuch' not found.")
+    logged = [r for r in records if r.getMessage() == "Error calling tool 'attendees'"]
     assert [(r.levelno, bool(r.exc_info)) for r in logged] == [(logging.INFO, False)]
 
 
