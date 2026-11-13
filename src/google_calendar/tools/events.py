@@ -131,7 +131,7 @@ def events(
         events(action="update", event_id="abc", summary="New Title", scope="all")
     """
     if action == "list":
-        if period is not None and period not in _PERIODS:
+        if period and period not in _PERIODS:
             raise InputError(f"Unknown period {period!r}: use {', '.join(_PERIODS[:-1])} or {_PERIODS[-1]}")
         return _list_events(
             calendar_id=calendar_id,
