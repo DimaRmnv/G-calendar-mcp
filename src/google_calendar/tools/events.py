@@ -7,7 +7,6 @@ Replaces: list_events, create_event, get_event, update_event, delete_event, sear
 
 from typing import Optional, Literal
 from datetime import datetime, timedelta, timezone as dt_timezone
-from zoneinfo import ZoneInfo
 import uuid
 
 from google_calendar.api.events import (
@@ -29,6 +28,7 @@ from google_calendar.api.client import (
     handle_auth_errors,
 )
 from google_calendar.api.timeutil import check_bounds, has_offset, to_rfc3339, window_point
+from google_calendar.errors import InputError, zone
 
 
 @handle_auth_errors
@@ -144,9 +144,11 @@ def events(
 
     elif action == "create":
         if not summary:
-            raise ValueError("summary is required for 'create' action")
+            raise InputError("summary is required for 'create' action")
         if not start or not end:
-            raise ValueError("start and end are required for 'create' action")
+            raise InputError("start and end are required for 'create' action")
+        if timezone:
+            zone(timezone)
         return _create_event(
             summary=summary,
             start=start,
@@ -169,7 +171,7 @@ def events(
 
     elif action == "get":
         if not event_id:
-            raise ValueError("event_id is required for 'get' action")
+            raise InputError("event_id is required for 'get' action")
         return _get_event(
             event_id=event_id,
             calendar_id=calendar_id,
@@ -178,7 +180,9 @@ def events(
 
     elif action == "update":
         if not event_id:
-            raise ValueError("event_id is required for 'update' action")
+            raise InputError("event_id is required for 'update' action")
+        if timezone:
+            zone(timezone)
         return _update_event(
             event_id=event_id,
             calendar_id=calendar_id,
@@ -206,7 +210,7 @@ def events(
 
     elif action == "delete":
         if not event_id:
-            raise ValueError("event_id is required for 'delete' action")
+            raise InputError("event_id is required for 'delete' action")
         return _delete_event(
             event_id=event_id,
             calendar_id=calendar_id,
@@ -217,7 +221,7 @@ def events(
 
     elif action == "search":
         if not query:
-            raise ValueError("query is required for 'search' action")
+            raise InputError("query is required for 'search' action")
         return _search_events(
             query=query,
             calendar_id=calendar_id,
@@ -231,7 +235,7 @@ def events(
 
     elif action == "batch":
         if not operations:
-            raise ValueError("operations list is required for 'batch' action")
+            raise InputError("operations list is required for 'batch' action")
         return _batch_operations(
             operations=operations,
             calendar_id=calendar_id,
@@ -242,7 +246,7 @@ def events(
 
     else:
         valid_actions = "list, create, get, update, delete, search, batch"
-        raise ValueError(f"Unknown action: {action}. Valid actions: {valid_actions}")
+        raise InputError(f"Unknown action: {action}. Valid actions: {valid_actions}")
 
 
 # Helper functions
@@ -269,7 +273,7 @@ def _get_time_range(
     if t_max:
         return (t_max - _DEFAULT_WINDOW).isoformat(), t_max.isoformat()
 
-    now = datetime.now(ZoneInfo(tz))
+    now = datetime.now(zone(tz))
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
     if period == "today":
@@ -529,7 +533,7 @@ def _update_event(
 
     # Owner decision 2026-11-12 (issue #3): refuse rather than widen the scope silently.
     if recurrence is not None and is_recurring and scope != "all":
-        raise ValueError("recurrence belongs to the series; pass scope='all'")
+        raise InputError("recurrence belongs to the series; pass scope='all'")
 
     target_event_id = event_id
     scope_applied = "single"
@@ -754,7 +758,7 @@ def _search_events(
     # the earlier of them: "since X" keeps covering the next year, a bound far from
     # today never inverts the window.
     if not t_min or not t_max:
-        now = datetime.now(ZoneInfo(tz))
+        now = datetime.now(zone(tz))
         if t_min:
             t_max = max(t_min, now) + _SEARCH_SPAN
         elif t_max:

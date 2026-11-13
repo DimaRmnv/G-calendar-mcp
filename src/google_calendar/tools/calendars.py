@@ -20,6 +20,7 @@ from google_calendar.api.calendars import (
     get_calendar_colors,
 )
 from google_calendar.api.client import execute_with_retry, get_service, handle_auth_errors
+from google_calendar.errors import InputError, zone
 from google_calendar.utils.config import list_accounts as config_list_accounts, get_default_account
 
 logger = logging.getLogger(__name__)
@@ -76,30 +77,34 @@ def calendars(
         calendars(action="settings", account="work")
         calendars(action="set_timezone", timezone="Asia/Bangkok")
     """
+    # A timezone the caller names is checked before Google is asked to store it.
+    if timezone and action in ("create", "update", "set_timezone"):
+        zone(timezone)
+
     # Calendar management actions
     if action == "list":
         return _list_calendars(account)
 
     elif action == "get":
         if not calendar_id:
-            raise ValueError("calendar_id is required for 'get' action")
+            raise InputError("calendar_id is required for 'get' action")
         return _get_calendar(calendar_id, account, include_acl)
 
     elif action == "create":
         if not summary:
-            raise ValueError("summary is required for 'create' action")
+            raise InputError("summary is required for 'create' action")
         return _create_calendar(summary, description, timezone, location, account)
 
     elif action == "update":
         if not calendar_id:
-            raise ValueError("calendar_id is required for 'update' action")
+            raise InputError("calendar_id is required for 'update' action")
         return _update_calendar(calendar_id, summary, description, timezone, location, account)
 
     elif action == "delete":
         if not calendar_id:
-            raise ValueError("calendar_id is required for 'delete' action")
+            raise InputError("calendar_id is required for 'delete' action")
         if calendar_id == "primary":
-            raise ValueError("Cannot delete primary calendar")
+            raise InputError("Cannot delete primary calendar")
         return _delete_calendar(calendar_id, account)
 
     # Colors action
@@ -112,7 +117,7 @@ def calendars(
 
     elif action == "set_timezone":
         if not timezone:
-            raise ValueError("timezone parameter required for 'set_timezone' action")
+            raise InputError("timezone parameter required for 'set_timezone' action")
         return _set_timezone(timezone, account)
 
     elif action == "list_accounts":
@@ -120,7 +125,7 @@ def calendars(
 
     else:
         valid_actions = "list, get, create, update, delete, colors, settings, set_timezone, list_accounts"
-        raise ValueError(f"Unknown action: {action}. Valid actions: {valid_actions}")
+        raise InputError(f"Unknown action: {action}. Valid actions: {valid_actions}")
 
 
 # Calendar management helpers

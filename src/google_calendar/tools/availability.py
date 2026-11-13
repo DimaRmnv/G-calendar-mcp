@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from google_calendar.api.freebusy import get_freebusy as api_get_freebusy
 from google_calendar.api.client import get_user_timezone, handle_auth_errors
 from google_calendar.api.timeutil import check_bounds, window_bound, window_point
+from google_calendar.errors import InputError, zone
 
 
 @handle_auth_errors
@@ -73,7 +74,7 @@ def availability(
 
     elif action == "find_slots":
         if not duration_minutes:
-            raise ValueError("duration_minutes is required for 'find_slots' action")
+            raise InputError("duration_minutes is required for 'find_slots' action")
         return _find_meeting_slots(
             duration_minutes=duration_minutes,
             date_range_start=time_min,
@@ -88,7 +89,7 @@ def availability(
         )
 
     else:
-        raise ValueError(f"Unknown action: {action}. Use 'query' or 'find_slots'.")
+        raise InputError(f"Unknown action: {action}. Use 'query' or 'find_slots'.")
 
 
 def _query_freebusy(
@@ -100,7 +101,7 @@ def _query_freebusy(
 ) -> dict:
     """Query free/busy information for calendars."""
     if not time_min or not time_max:
-        raise ValueError("time_min and time_max are required for 'query' action")
+        raise InputError("time_min and time_max are required for 'query' action")
     check_bounds(time_min, time_max)
 
     # Default to primary calendar
@@ -149,8 +150,11 @@ def _find_meeting_slots(
 ) -> dict:
     """Find available meeting slots across calendars and timezones."""
     if not date_range_start or not date_range_end:
-        raise ValueError("time_min and time_max are required for 'find_slots' action")
+        raise InputError("time_min and time_max are required for 'find_slots' action")
     check_bounds(date_range_start, date_range_end)
+    # Participant timezones are checked before Google is asked anything.
+    for name in participant_timezones or []:
+        zone(name)
 
     # Default timezone
     if not timezone:
@@ -161,7 +165,7 @@ def _find_meeting_slots(
         calendars = ["primary"]
 
     # Parse date range (a date is the whole day, as for every window: timeutil.window_point)
-    tz = ZoneInfo(timezone)
+    tz = zone(timezone)
     range_start = window_point(date_range_start, timezone, end=False)
     range_end = window_point(date_range_end, timezone, end=True)
 

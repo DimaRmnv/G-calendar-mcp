@@ -112,6 +112,11 @@ def event(event_id, start="2026-11-12T12:00:00+02:00", end="2026-11-12T14:00:00+
 
 @pytest.fixture
 def fake(monkeypatch, tmp_path):
+    return install_fake_service(monkeypatch, tmp_path)
+
+
+def install_fake_service(monkeypatch, tmp_path) -> FakeService:
+    """Replace Google at every `get_service` seam with a FakeService; also used by other modules."""
     monkeypatch.setenv("HOME", str(tmp_path))  # empty local config: no default account
     monkeypatch.setattr(settings, "server_base_url", BASE_URL, raising=False)
     # No server secret (nor one from .env): auth_url is the bare start link
