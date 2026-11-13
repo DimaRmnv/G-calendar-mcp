@@ -304,12 +304,16 @@ def serve():
     if settings.transport_mode == "http":
         import uvicorn
 
+        from google_calendar.log_redaction import uvicorn_log_config
+
         app = create_http_app()
         uvicorn.run(
             app,
             host=settings.http_host,
             port=settings.http_port,
-            log_level="info"
+            log_level="info",
+            # The access log writes every request URL; keys and tokens in it are redacted.
+            log_config=uvicorn_log_config(),
         )
     else:
         mcp.run()
