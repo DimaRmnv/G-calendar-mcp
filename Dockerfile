@@ -17,6 +17,17 @@ COPY src ./src
 # Install package with cloud dependencies
 RUN pip install --no-cache-dir -e ".[cloud]"
 
+# Current Debian packages, and no package installer, in the shipped image. The server's
+# build never pulls the base, so its packages are as old as the tag's last pull: the
+# 2026-11-23 image scan found the apt, gzip, krb5, openssl, pcre2, sqlite, util-linux
+# and zlib fixes missing, and pip itself carried the image's only Python findings.
+# This layer sits after the application install, so every build that changes the code
+# re-runs it. pip is not needed once the install is done.
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get -y upgrade && \
+    rm -rf /var/lib/apt/lists/* && \
+    python -m pip uninstall -y pip
+
 # Create data directory
 RUN mkdir -p /data/credentials
 
